@@ -1,0 +1,11 @@
+{
+  "name": "derzhava",
+  "version": "1.0.0",
+  "description": "Браузерная геополитическая стратегия с углублённой экономикой и политикой",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "python3 -m http.server 8080 --directory public",
+    "test": "node tests/sim-test.mjs liorna 25 42"
+  }
+}

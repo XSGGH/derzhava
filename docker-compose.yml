@@ -1,0 +1,7 @@
+services:
+  derzhava:
+    build: .
+    container_name: derzhava
+    restart: unless-stopped
+    ports:
+      - "8080:80"

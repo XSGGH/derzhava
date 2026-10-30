@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Держава — геополитическая стратегия</title>
+  <meta name="description" content="Браузерная геополитическая стратегия с глубокой экономикой и политикой">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 0l8 8-8 8-8-8z' fill='%23e8b64a'/></svg>">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="start"></div>
+  <div id="game" hidden>
+    <header class="top">
+      <div class="brand">◆ ДЕРЖАВА</div>
+      <div id="hdr-country" class="hc"></div>
+      <div class="datebox"><span id="hdr-date"></span></div>
+      <div id="controls" class="controls">
+        <button data-ctl="0" title="Пауза (Пробел)">⏸</button>
+        <button data-ctl="1" title="Медленно">▶</button>
+        <button data-ctl="2" title="Быстро">▶▶</button>
+        <button data-ctl="3" title="Очень быстро">▶▶▶</button>
+        <button data-ctl="next" class="next" title="Следующий месяц (Enter)">Следующий месяц →</button>
+        <button data-ctl="save" title="Сохранить">💾</button>
+        <button data-ctl="load" title="Загрузить">📂</button>
+        <button data-ctl="menu" title="Главное меню">☰</button>
+      </div>
+      <div id="hdr-stats" class="stats"></div>
+    </header>
+    <main class="layout">
+      <div id="mapwrap" class="mapwrap">
+        <svg id="map" preserveAspectRatio="xMidYMid meet"></svg>
+        <div id="modes" class="modes">
+          <button data-mode="political" class="on">Политическая</button>
+          <button data-mode="relations">Отношения</button>
+          <button data-mode="bloc">Блоки</button>
+          <button data-mode="gdppc">Богатство</button>
+          <button data-mode="stability">Стабильность</button>
+          <button data-mode="resources">Ресурсы</button>
+          <button data-mode="terrain">Рельеф</button>
+        </div>
+        <div id="tip" class="tip" hidden></div>
+      </div>
+      <aside class="side">
+        <nav id="tabs" class="tabs"></nav>
+        <div id="panel" class="panel"></div>
+      </aside>
+    </main>
+  </div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
