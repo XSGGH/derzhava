@@ -8,10 +8,10 @@ const years = +(process.argv[3] || 25);
 const G = createWorld(player, { seed: +(process.argv[4] || 42) });
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : 'NaN');
 function report() {
-  console.log(`\n=== ${G.year}-${G.month + 1}  oil ${f(G.markets.oil.price)} gas ${f(G.markets.gas.price)} met ${f(G.markets.metals.price)} grain ${f(G.markets.grain.price)} wars ${G.wars.length}`);
+  console.log(`\n=== ${G.year}-${G.month + 1} wars ${G.wars.length} | ` + Object.entries(G.goods).map(([k, v]) => k + ' ' + f(v.p * v.shock, 2)).join(' '));
   for (const C of Object.values(G.countries)) {
     const e = C.eco;
-    console.log(`${C.short.padEnd(9)} ${C.alive ? ' ' : '✝'} gdp ${f(e.gdp, 0).padStart(6)} pc ${f(e.gdp / C.pop).padStart(5)} g ${f(e.growth * 100).padStart(5)}% inf ${f(e.infl * 100).padStart(5)}% u ${f(e.unemp * 100).padStart(4)}% r ${f(e.rate * 100).padStart(4)} def ${f((e.budget.deficitGdp || 0) * 100).padStart(5)} debt ${f(e.debt / e.gdp * 100, 0).padStart(4)}% fx ${f(e.fx, 0).padStart(4)} tb ${f(e.tbLag * 100).padStart(5)} appr ${f(C.pol.approval, 0)} stab ${f(C.pol.stability, 0)} pc ${f(C.pol.pc, 0)} ${C.gov[0]} ${C.party} ${e.rating}`);
+    console.log(`${C.short.padEnd(9)} ${C.alive ? ' ' : '✝'} gdp ${f(e.gdp, 0).padStart(6)} pc ${f(e.gdp / C.pop).padStart(5)} g ${f(e.growth * 100).padStart(5)}% inf ${f(e.infl * 100).padStart(5)}% u ${f(e.unemp * 100).padStart(4)}% r ${f(e.rate * 100).padStart(4)} def ${f((e.budget.deficitGdp || 0) * 100).padStart(5)} debt ${f(e.debt / e.gdp * 100, 0).padStart(4)}% fx ${f(e.fx, 0).padStart(4)} tb ${f(e.tbLag * 100).padStart(5)} ex ${f(e.ex / e.gdp * 100, 0)} im ${f(e.im / e.gdp * 100, 0)} appr ${f(C.pol.approval, 0)} stab ${f(C.pol.stability, 0)} pc ${f(C.pol.pc, 0)} ${C.gov[0]} ${C.party} ${e.rating}`);
   }
 }
 report();

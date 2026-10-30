@@ -1,5 +1,7 @@
 // ===== Интерфейс =====
-import { COUNTRIES, PARTIES, GROUPS, GOV, BLOCS, LAWS, LAW_BY_ID, LAW_CATS, COMMODITIES, END_YEAR } from './data.js';
+import { COUNTRIES, PARTIES, GROUPS, GOV, BLOCS, LAWS, LAW_BY_ID, LAW_CATS, END_YEAR } from './data.js';
+import { GOODS, GOOD, GOOD_CATS, IO, USED_IN } from './goods.js';
+import { tariffOf } from './trade.js';
 import { createWorld } from './world.js';
 import {
   step, dateStr, budget, lawMods, lawVote, lawAvailable, passLaw, repealLaw, strength, wars, atWar, hasTreaty, sanctioned,
@@ -8,10 +10,11 @@ import {
 import { ACTIONS, canDo, doAction, joinBloc } from './diplo.js';
 import { EVENTS, resolveEvent } from './events.js';
 import { MapView } from './map.js';
-import { lineChart, spark } from './charts.js';
+import { lineChart, spark, hbars } from './charts.js';
 import { seedRng, getRng } from './rng.js';
 
 let G = null, map = null, timer = null, speed = 0, tab = 'overview', selC = null, lawCat = 'econ';
+let tradeView = { v: 'list' }, tradeCat = 'all', tradeSort = { k: 'ex', d: -1 };
 const $ = (s, r = document) => r.querySelector(s);
 const P = () => G.countries[G.player];
 
@@ -149,15 +152,16 @@ function renderHeader() {
   ].join('');
 }
 
-const TABS = [['overview', 'Обзор'], ['economy', 'Экономика'], ['budget', 'Бюджет'], ['society', 'Общество'], ['politics', 'Политика'], ['laws', 'Законы'], ['diplomacy', 'Дипломатия'], ['military', 'Армия'], ['world', 'Мир']];
+const TABS = [['overview', 'Обзор'], ['economy', 'Экономика'], ['trade', 'Торговля'], ['budget', 'Бюджет'], ['society', 'Общество'], ['politics', 'Политика'], ['laws', 'Законы'], ['diplomacy', 'Дипломатия'], ['military', 'Армия'], ['world', 'Мир']];
 
 function renderTab() {
   for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.tab === tab);
-  const fn = { overview, economy, budgetTab, society, politics, laws, diplomacy, military, world }[tab === 'budget' ? 'budgetTab' : tab];
+  const fn = { overview, economy, budgetTab, society, politics, laws, diplomacy, military, world, trade: tradeTab }[tab === 'budget' ? 'budgetTab' : tab];
   const sc = $('#panel').scrollTop;
   $('#panel').innerHTML = fn();
   $('#panel').scrollTop = sc;
   afterRender();
+  syncTradeMap();
 }
 
 // ---------- советники ----------
@@ -208,9 +212,12 @@ function economy() {
   const manual = !(M.rateRule > 0) && !e.autoRate;
   const tot = e.P.agri + e.P.industry + e.P.services + e.P.tech + e.miningOut;
   const sectors = [['agri', 'Сельское хозяйство'], ['industry', 'Промышленность'], ['services', 'Услуги'], ['tech', 'Высокие технологии']];
-  const rows = sectors.map(([k, n]) => `<tr><td>${n}</td><td>${bn(e.P[k])}</td><td>${pct(e.P[k] / tot)}</td><td class="${cls(e.sectorG?.[k] > 0.015)}">${spct(e.sectorG?.[k] || 0)}</td></tr>`).join('')
-    + `<tr><td>Добыча сырья</td><td>${bn(e.miningOut)}</td><td>${pct(e.miningOut / tot)}</td><td>по ценам</td></tr>`;
-  const com = Object.entries(COMMODITIES).map(([k, v]) => { const m = G.markets[k]; return `<tr><td>${v.name}</td><td>${nf(m.price, 0)} <small>${v.unit}</small></td><td class="${m.price > v.base ? 'up' : 'down'}">${spct(m.price / v.base - 1, 0)}</td><td>${spark(m.hist.slice(-60))}</td></tr>`; }).join('');
+  const util = { agri: C.trade.agriIdx, industry: C.trade.U.industry, services: C.trade.U.services, tech: C.trade.U.tech };
+  const rows = sectors.map(([k, n]) => `<tr><td>${n}</td><td class="num">${bn(e.P[k])}</td><td class="num">${pct(e.P[k] / tot)}</td><td class="num ${cls(e.sectorG?.[k] > 0.015)}">${spct(e.sectorG?.[k] || 0)}</td><td class="num ${cls(util[k] > 0.97)}">${pct(util[k], 0)}</td></tr>`).join('')
+    + `<tr><td>Добыча сырья</td><td class="num">${bn(e.miningOut)}</td><td class="num">${pct(e.miningOut / tot)}</td><td class="num">${spct(Math.log(e.miningEff) / Math.max(1, G.turn / 12))}</td><td class="num">по ценам</td></tr>`;
+  const keyG = ['oil', 'gas', 'grain', 'steel', 'chips', 'cars'];
+  const com = keyG.map((gid) => `<tr class="click" data-act="good_go" data-id="${gid}"><td>${GOOD[gid].icon} ${GOOD[gid].name}</td><td class="num">${priceStr(gid)}</td><td class="num ${chg12(gid) >= 0 ? 'up' : 'down'}">${spct(chg12(gid), 0)}</td><td>${spark(G.goods[gid].hist.slice(-60), 'auto')}</td></tr>`).join('');
+  const T = C.trade;
   return `
   <section class="kpis">
     ${kpi('ВВП', bn(e.gdp), spct(e.growth) + ' г/г')}
@@ -220,7 +227,15 @@ function economy() {
     ${kpi('Доверие бизнеса', nf(e.conf), '/100')}
     ${kpi('Неравенство (Джини)', nf(e.gini, 2), e.gini > 0.4 ? 'высокое' : 'умеренное')}
   </section>
-  <section class="card"><h4>Отрасли</h4><table class="tbl"><tr><th>Сектор</th><th>Выпуск</th><th>Доля</th><th>Рост потенциала</th></tr>${rows}</table></section>
+  <section class="grid2">
+    <div class="card"><h4>ВВП по отраслям, млрд $</h4><canvas data-chart="e_sect"></canvas></div>
+    <div class="card"><h4>Рост ВВП год к году, %</h4><canvas data-chart="e_growth"></canvas></div>
+    <div class="card"><h4>Ставка, инфляция и ожидания, %</h4><canvas data-chart="e_rate"></canvas></div>
+    <div class="card"><h4>Курс валюты и цены товарной корзины</h4><canvas data-chart="e_fx"></canvas></div>
+    <div class="card"><h4>Безработица, %</h4><canvas data-chart="e_unemp"></canvas></div>
+    <div class="card"><h4>Доверие бизнеса</h4><canvas data-chart="e_conf"></canvas></div>
+  </section>
+  <section class="card"><h4>Отрасли</h4><table class="tbl"><tr><th>Сектор</th><th>Потенциал</th><th>Доля</th><th>Рост потенциала</th><th>Загрузка</th></tr>${rows}</table><div class="mini">Загрузка падает, если отрасли не хватает сырья (дефицит, санкции) или ей некуда продавать продукцию.</div></section>
   <section class="card">
     <h4>Денежная политика</h4>
     <div class="row"><label><input type="checkbox" data-k="autoRate" ${e.autoRate ? 'checked' : ''} ${M.rateRule > 0 ? 'disabled' : ''}> Автопилот ставки (правило Тейлора)</label>
@@ -240,9 +255,9 @@ function economy() {
       <div><span>Потеря доступа к рынкам</span><b class="${cls(e.accessLoss < 0.05)}">${pct(e.accessLoss, 0)}</b></div>
       <div><span>Санкционное давление (доля мирового ВВП)</span><b class="${cls(e.sanctLoss < 0.05)}">${pct(e.sanctLoss || 0, 0)}</b></div>
     </div>
-    <div class="row"><button class="btn" data-act="fxint">Валютная интервенция (−3% ВВП резервов)</button><span class="mini">Укрепляет курс, сбивает инфляцию от девальвации.</span></div>
+    <div class="row"><button class="btn ghost" data-act="tab_trade">Торговля по товарам и партнёрам →</button><button class="btn" data-act="fxint">Валютная интервенция (−3% ВВП резервов)</button><span class="mini">Укрепляет курс, сбивает инфляцию от девальвации.</span></div>
   </section>
-  <section class="card"><h4>Мировые сырьевые рынки</h4><table class="tbl"><tr><th>Товар</th><th>Цена</th><th>к 2030</th><th>5 лет</th></tr>${com}</table></section>`;
+  <section class="card"><h4>Ключевые рынки</h4><table class="tbl"><tr><th>Товар</th><th>Цена</th><th>12 мес</th><th>5 лет</th></tr>${com}</table><div class="row"><button class="btn" data-act="tab_trade">Все 25 товаров и торговые потоки →</button></div></section>`;
 }
 
 const kpi = (l, v, s) => `<div class="kpi"><span>${l}</span><b>${v}</b><small>${s}</small></div>`;
@@ -253,8 +268,8 @@ const TAXES = [['inc', 'НДФЛ', 0, 0.5, 'Рабочие и бизнес не 
   ['vat', 'НДС', 0, 0.3, 'Стабильный доход, давит на потребление'], ['res', 'НДПИ / рента', 0, 0.8, 'Доля государства в выручке добычи'], ['tariff', 'Импортные пошлины', 0, 0.4, 'Защищает рынок, но дороже импорт']];
 const SPEND = [['social', 'Соцвыплаты и пенсии', 0.3], ['health', 'Здравоохранение', 0.12], ['edu', 'Образование', 0.1], ['infra', 'Инфраструктура', 0.1], ['defense', 'Оборона', 0.12],
   ['security', 'Полиция и безопасность', 0.06], ['science', 'Наука', 0.06], ['subAgri', 'Субсидии АПК', 0.04], ['subInd', 'Субсидии промышленности', 0.04], ['subTech', 'Субсидии IT и хай-теку', 0.04]];
-const REV_N = { inc: 'НДФЛ', pay: 'Страховые взносы', corp: 'Налог на прибыль', vat: 'НДС', res: 'НДПИ / рента', tariff: 'Пошлины' };
-const EXP_N = { social: 'Соцвыплаты', health: 'Здравоохранение', edu: 'Образование', infra: 'Инфраструктура', defense: 'Оборона', security: 'Безопасность', science: 'Наука', subsidies: 'Субсидии', admin: 'Госаппарат', programs: 'Госпрограммы', war: 'Военные операции', interest: 'Проценты по долгу' };
+const REV_N = { inc: 'НДФЛ', pay: 'Страховые взносы', corp: 'Налог на прибыль', vat: 'НДС', res: 'НДПИ / рента', tariff: 'Импортные пошлины', duty: 'Экспортные пошлины' };
+const EXP_N = { social: 'Соцвыплаты', health: 'Здравоохранение', edu: 'Образование', infra: 'Инфраструктура', defense: 'Оборона', security: 'Безопасность', science: 'Наука', subsidies: 'Субсидии', admin: 'Госаппарат', programs: 'Госпрограммы', tradeSub: 'Субсидии товаропроизводителям', war: 'Военные операции', interest: 'Проценты по долгу' };
 
 function budgetSummary(C) {
   const b = budget(G, C), e = C.eco;
@@ -273,6 +288,7 @@ function budgetTab() {
   const C = P(), e = C.eco, M = lawMods(C);
   return `
   <section class="card" id="bsum">${budgetSummary(C)}</section>
+  <section class="grid2"><div class="card"><h4>Доходы и расходы, млрд $</h4><canvas data-chart="b_revexp"></canvas></div><div class="card"><h4>Дефицит и долг, % ВВП</h4><canvas data-chart="debt"></canvas></div></section>
   <section class="card"><h4>Налоги</h4>${TAXES.map(([k, n, mi, ma, h]) => slider('tax.' + k, n, e.tax[k] || 0, mi, ma, 0.005, pct(e.tax[k] || 0, 1), false, h + (k === 'tariff' && M.tariffCap ? ` · свободная торговля: не выше ${pct(M.tariffCap, 0)}` : ''))).join('')}</section>
   <section class="card"><h4>Расходы, % ВВП</h4>${SPEND.map(([k, n, ma]) => slider('spend.' + k, n, e.spend[k], 0, ma, 0.001, pct(e.spend[k], 1) + ' · ' + bn(e.spend[k] * e.gdp))).join('')}
   <div class="mini">Расходы на образование, здравоохранение, инфраструктуру и науку медленно (годами) меняют соответствующие индексы. Субсидии ускоряют рост отраслей. Коррупция съедает часть эффекта.</div></section>`;
@@ -391,6 +407,7 @@ function diplomacy() {
         <div><span>Рост / инфляция</span><b>${spct(X.eco.growth)} / ${pct(X.eco.infl)}</b></div>
         <div><span>Стабильность</span><b>${nf(X.pol.stability)}</b></div>
         <div><span>Военная мощь</span><b class="${cls(ms >= xs)}">${nf(xs)} (у нас ${nf(ms)})</b></div>
+        <div><span>Торговля с нами</span><b>экспорт ${bn(C.trade.exBy[X.id] || 0)} · импорт ${bn(C.trade.imBy[X.id] || 0)} <a class="clink" data-act="partner" data-id="${X.id}">профиль →</a></b></div>
         <div><span>Союзники</span><b>${alive(G).filter((Y) => Y.id !== X.id && hasTreaty(G, 'alliance', X.id, Y.id)).map((Y) => Y.short).join(', ') || '—'}</b></div>
       </div>
       <div class="acts">${acts}</div>
@@ -427,9 +444,182 @@ function world() {
     <td><span class="flag" style="background:${X.color}"></span>${X.short}</td><td>${bn(X.eco.gdp)}</td><td>${nf(X.eco.gdp / X.pop, 1)}k</td><td class="${cls(X.eco.growth > 0.015)}">${spct(X.eco.growth)}</td>
     <td>${pct(X.eco.infl)}</td><td>${pct(X.eco.debt / X.eco.gdp, 0)}</td><td>${nf(X.pol.stability)}</td><td>${GOV[X.gov].name.split(' ')[0]}</td><td>${PARTIES[X.party].short}</td><td>${X.eco.rating}</td></tr>`).join('');
   const dead = Object.values(G.countries).filter((X) => !X.alive).map((X) => X.short).join(', ');
-  return `<section class="card"><h4>Мировой рейтинг</h4><table class="tbl world"><tr><th>Страна</th><th>ВВП</th><th>на душу</th><th>Рост</th><th>Инфл.</th><th>Долг</th><th>Стаб.</th><th>Режим</th><th>Власть</th><th>Рейт.</th></tr>${rows}</table>${dead ? `<div class="mini">Исчезли с карты: ${dead}</div>` : ''}</section>
+  return `<section class="grid2"><div class="card"><h4>ВВП стран, млрд $</h4><canvas data-chart="w_gdp"></canvas></div><div class="card"><h4>Объём мировой торговли, млрд $/год</h4><canvas data-chart="w_trade"></canvas></div></section>
+  <section class="card"><h4>Мировой рейтинг</h4><table class="tbl world"><tr><th>Страна</th><th>ВВП</th><th>на душу</th><th>Рост</th><th>Инфл.</th><th>Долг</th><th>Стаб.</th><th>Режим</th><th>Власть</th><th>Рейт.</th></tr>${rows}</table>${dead ? `<div class="mini">Исчезли с карты: ${dead}</div>` : ''}</section>
   <section class="card"><h4>Текущие войны</h4>${G.wars.map((w) => `<div class="row">⚔ ${w.sideA.map((i) => G.countries[i].short).join(', ')} — ${w.sideB.map((i) => G.countries[i].short).join(', ')} <small>(${w.months} мес., счёт ${nf(w.score)})</small></div>`).join('') || '<div class="mini">Мир во всём мире.</div>'}</section>
   <section class="card"><h4>Цель партии</h4><div class="mini">Продержаться у власти до ${END_YEAR} года. Итоговый счёт учитывает рост ВВП на душу, одобрение, стабильность, территорию и долговую нагрузку. Текущий счёт: <b>${nf(score(G, P()))}</b></div></section>`;
+}
+
+
+// =================== ТОРГОВЛЯ ===================
+const CAT_ORDER = ['raw', 'agri', 'industry', 'tech', 'services'];
+const dateLbl = (i, n) => { const back = n - 1 - i; let m = G.month - 1 - back, y = G.year; while (m < 0) { m += 12; y--; } return ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'][m] + ' ' + y; };
+const gPrice = (gid) => G.goods[gid].p;
+const gDisp = (gid) => gPrice(gid) * GOOD[gid].base;
+const priceStr = (gid) => { const v = gDisp(gid); return (v >= 1000 ? nf(v, 0) : v >= 10 ? nf(v, 1) : nf(v, 2)) + ' ' + GOOD[gid].unit; };
+const chg12 = (gid) => { const h = G.goods[gid].hist; return h.length > 12 ? h[h.length - 1] / h[h.length - 13] - 1 : (h.length ? h[h.length - 1] / GOOD[gid].base - 1 : 0); };
+const flagOf = (id) => `<span class="flag" style="background:${G.countries[id].color}"></span>`;
+const cname = (id) => `<a class="clink" data-act="partner" data-id="${id}">${flagOf(id)}${G.countries[id].short}</a>`;
+const glink = (gid) => `<a class="glink" data-act="good" data-id="${gid}">${GOOD[gid].icon} ${GOOD[gid].name}</a>`;
+const sumSeries = (arrs) => { const n = Math.max(0, ...arrs.map((a) => a.length)); const out = Array(n).fill(0); for (const a of arrs) { const off = n - a.length; a.forEach((v, i) => (out[off + i] += v)); } return out; };
+
+function tradeTab() {
+  if (tradeView.v === 'good') return goodView(tradeView.id);
+  if (tradeView.v === 'partner' && G.countries[tradeView.id]?.alive) return partnerView(tradeView.id);
+  return tradeList();
+}
+
+function syncTradeMap() {
+  if (tab !== 'trade') { map.setFlows([], null); if (map.mode === 'good') map.setMode('political'); return; }
+  const P0 = G.player;
+  if (tradeView.v === 'good') {
+    const gid = tradeView.id;
+    const fl = (G.flows[gid] || []).slice(0, 24).map(([a, b, v]) => ({ from: a, to: b, value: v, color: a === P0 ? '#e8b64a' : b === P0 ? '#4c8dff' : GOOD_CATS[GOOD[gid].cat].color, label: `${G.countries[a].short} → ${G.countries[b].short}: ${bn(v)}` }));
+    map.mode = 'good'; for (const x of $('#modes').children) x.classList.toggle('on', x.dataset.mode === 'good');
+    map.setFlows(fl, gid);
+  } else if (tradeView.v === 'partner') {
+    if (map.mode === 'good') map.mode = 'political';
+    const id = tradeView.id, fl = [];
+    for (const g of GOODS) for (const [a, b, v] of G.flows[g.id] || []) {
+      if ((a === P0 && b === id) || (a === id && b === P0)) fl.push({ from: a, to: b, value: v, color: GOOD_CATS[g.cat].color, label: `${g.name}: ${G.countries[a].short} → ${G.countries[b].short} ${bn(v)}` });
+    }
+    fl.sort((x, y) => y.value - x.value);
+    map.setFlows(fl.slice(0, 12), null);
+  } else {
+    if (map.mode === 'good') map.mode = 'political';
+    for (const x of $('#modes').children) x.classList.toggle('on', x.dataset.mode === map.mode);
+    const C = P(), fl = [];
+    for (const [d, v] of Object.entries(C.trade.exBy)) if (v > 0) fl.push({ from: P0, to: d, value: v, color: '#e8b64a', label: `Экспорт в ${G.countries[d].short}: ${bn(v)}` });
+    for (const [d, v] of Object.entries(C.trade.imBy)) if (v > 0) fl.push({ from: d, to: P0, value: v, color: '#4c8dff', label: `Импорт из ${G.countries[d].short}: ${bn(v)}` });
+    map.setFlows(fl, null);
+  }
+}
+
+function tradeList() {
+  const C = P(), T = C.trade, e = C.eco;
+  const world = alive(G).reduce((s, X) => s + X.trade.ex, 0);
+  // условия торговли: средняя цена экспорта / средняя цена импорта
+  let exP = 0, exW = 0, imP = 0, imW = 0;
+  for (const g of GOODS) { const s = C.gs[g.id]; exP += s.ex * gPrice(g.id); exW += s.ex; imP += s.im * gPrice(g.id); imW += s.im; }
+  const tot = exW && imW ? (exP / exW) / (imP / imW) : 1;
+  const partners = Object.keys(T.exBy).filter((d) => T.exBy[d] + T.imBy[d] > 0.5).length;
+  const exRows = Object.entries(T.exBy).filter(([, v]) => v > 0.01).sort((a, b) => b[1] - a[1]).map(([d, v]) => ({ label: `${flagOf(d)}${G.countries[d].short}`, value: v, color: '#e8b64a', act: 'partner', id: d, sub: pct(v / T.ex, 0) }));
+  const imRows = Object.entries(T.imBy).filter(([, v]) => v > 0.01).sort((a, b) => b[1] - a[1]).map(([d, v]) => ({ label: `${flagOf(d)}${G.countries[d].short}`, value: v, color: '#4c8dff', act: 'partner', id: d, sub: pct(v / T.im, 0) }));
+  const cats = ['all', ...CAT_ORDER].map((c) => `<button data-act="tcat" data-id="${c}" class="${tradeCat === c ? 'on' : ''}">${c === 'all' ? 'Все товары' : GOOD_CATS[c].name}</button>`).join('');
+  let list = GOODS.filter((g) => tradeCat === 'all' || g.cat === tradeCat).map((g) => ({ g, s: C.gs[g.id] }));
+  const key = { name: (r) => r.g.name, price: (r) => chg12(r.g.id), prod: (r) => r.s.prod * gPrice(r.g.id), dem: (r) => r.s.dem * gPrice(r.g.id), ex: (r) => r.s.ex * gPrice(r.g.id), im: (r) => r.s.im * gPrice(r.g.id), self: (r) => r.s.prod / Math.max(1e-6, r.s.dem) }[tradeSort.k];
+  list.sort((a, b) => { const x = key(a), y = key(b); return (typeof x === 'string' ? x.localeCompare(y) : x - y) * tradeSort.d; });
+  const th = (k, n) => `<th data-act="tsort" data-id="${k}" class="sortable">${n}${tradeSort.k === k ? (tradeSort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  const rows = list.map(({ g, s }) => {
+    const pr = gPrice(g.id), self = s.prod / Math.max(1e-6, s.dem), c = chg12(g.id);
+    const flags = [C.tp.ban[g.id] ? '<span class="tflag bad" title="Запрет экспорта">⛔</span>' : '', C.tp.tariff[g.id] != null ? `<span class="tflag" title="Особая пошлина">${pct(C.tp.tariff[g.id], 0)}</span>` : '', C.tp.duty[g.id] ? `<span class="tflag" title="Экспортная пошлина">↑${pct(C.tp.duty[g.id], 0)}</span>` : '', C.tp.sub[g.id] ? `<span class="tflag good" title="Субсидия">₽${pct(C.tp.sub[g.id], 0)}</span>` : '', s.shortR > 0.05 ? `<span class="tflag bad" title="Дефицит">дефицит ${pct(s.shortR, 0)}</span>` : ''].join('');
+    return `<tr class="click" data-act="good" data-id="${g.id}"><td><span class="gico">${g.icon}</span>${g.name} ${flags}</td><td class="num">${priceStr(g.id)}</td><td class="num ${c >= 0 ? 'up' : 'down'}">${spct(c, 0)}</td><td>${spark(G.goods[g.id].hist.slice(-60), 'auto', 64, 20)}</td>
+      <td class="num">${bn(s.prod * pr)}</td><td class="num">${bn(s.dem * pr)}</td><td class="num up">${s.ex > 0.005 ? bn(s.ex * pr) : '—'}</td><td class="num down">${s.im > 0.005 ? bn(s.im * pr) : '—'}</td>
+      <td><div class="selfbar" title="Самообеспеченность ${pct(self, 0)}"><i style="width:${Math.min(100, self * 50)}%;background:${self >= 1 ? '#43c37a' : self > 0.6 ? '#e8a33c' : '#ef5a4f'}"></i><em></em></div></td></tr>`;
+  }).join('');
+  return `
+  <section class="kpis">${kpi('Экспорт', bn(T.ex), pct(T.ex / e.gdp) + ' ВВП')}${kpi('Импорт', bn(T.im), pct(T.im / e.gdp) + ' ВВП')}${kpi('Сальдо', `<span class="${cls(T.ex >= T.im)}">${bn(T.ex - T.im)}</span>`, spct((T.ex - T.im) / e.gdp) + ' ВВП')}
+    ${kpi('Доля в мировом экспорте', pct(T.ex / Math.max(1, world)), 'мировая торговля ' + bn(world))}${kpi('Условия торговли', nf(tot, 2), tot > 1 ? 'экспорт дороже импорта' : 'импорт дороже экспорта')}${kpi('Партнёров', partners, 'пошлины: ' + pct(e.tax.tariff, 0))}</section>
+  <section class="grid2">
+    <div class="card"><h4>Экспорт и импорт, млрд $/год</h4><canvas data-chart="tr_exim"></canvas></div>
+    <div class="card"><h4>Структура экспорта</h4><canvas data-chart="tr_excat"></canvas></div>
+    <div class="card"><h4>Куда продаём</h4>${hbars(exRows, bn)}</div>
+    <div class="card"><h4>Откуда покупаем</h4>${hbars(imRows, bn)}</div>
+  </section>
+  <section class="card"><h4>Товары · клик — подробности, потоки, политика</h4><div class="subtabs">${cats}</div>
+    <div class="tblwrap"><table class="tbl goods"><tr>${th('name', 'Товар')}<th>Мировая цена</th>${th('price', '12 мес')}<th>5 лет</th>${th('prod', 'Произв.')}${th('dem', 'Потребл.')}${th('ex', 'Экспорт')}${th('im', 'Импорт')}${th('self', 'Самообесп.')}</tr>${rows}</table></div>
+    <div class="mini">Стоимость — в млрд $ в год по текущим мировым ценам. Потребление включает промышленный спрос (сырьё для других отраслей). Шкала самообеспеченности: середина — 100%.</div></section>
+  <section class="card"><h4>Ценовые индексы мировых рынков (2030 = 100)</h4><canvas data-chart="tr_catidx"></canvas></section>
+  <section class="card"><h4>Общая торговая политика</h4>${slider('tax.tariff', 'Базовая импортная пошлина (для всех товаров без особой ставки)', e.tax.tariff, 0, 0.4, 0.005, pct(e.tax.tariff, 1))}
+    <div class="mini">Пошлины поднимают внутренние цены импорта и сокращают спрос на него; доход идёт в бюджет. Особые ставки, экспортные пошлины, запреты, субсидии и эмбарго настраиваются в карточке каждого товара.</div></section>`;
+}
+
+function goodView(gid) {
+  const C = P(), g = GOOD[gid], s = C.gs[gid], pr = gPrice(gid), gm = G.goods[gid];
+  const rows = alive(G).map((X) => ({ X, s: X.gs[gid] }));
+  const prodRows = rows.filter((r) => r.s.prod > 0.001).sort((a, b) => b.s.prod - a.s.prod).map((r) => ({ label: `${flagOf(r.X.id)}${r.X.short}`, value: r.s.prod * pr, color: r.X.id === G.player ? '#e8b64a' : r.X.color, act: 'partner', id: r.X.id }));
+  const demRows = rows.filter((r) => r.s.dem > 0.001).sort((a, b) => b.s.dem - a.s.dem).map((r) => ({ label: `${flagOf(r.X.id)}${r.X.short}`, value: r.s.dem * pr, color: r.X.id === G.player ? '#e8b64a' : r.X.color, act: 'partner', id: r.X.id, sub: r.s.shortR > 0.02 ? `<span class="bad">дефицит ${pct(r.s.shortR, 0)}</span>` : '' }));
+  const fl = G.flows[gid] || [];
+  const fTot = fl.reduce((t, f) => t + f[2], 0);
+  const flowRows = fl.slice(0, 30).map(([a, b, v]) => `<tr class="${a === G.player || b === G.player ? 'me' : ''}"><td>${cname(a)}</td><td class="arrow">→</td><td>${cname(b)}</td><td class="num">${bn(v)}</td><td class="num">${pct(v / Math.max(1e-9, fTot), 1)}</td></tr>`).join('');
+  const ins = Object.entries(IO[gid]).map(([i, a]) => `<div class="chain">${glink(i)}<span>${nf(a * 100, 0)}¢ на $1</span>${C.gs[i].shortR > 0.02 ? `<em class="bad">дефицит ${pct(C.gs[i].shortR, 0)}</em>` : `<em>${C.gs[i].prod >= C.gs[i].dem ? 'своё' : 'импорт ' + pct(C.gs[i].im / Math.max(1e-6, C.gs[i].dem), 0)}</em>`}</div>`).join('') || '<div class="mini">Первичный ресурс — добывается из недр/производится без сырья.</div>';
+  const outs = (USED_IN[gid] || []).sort((a, b) => b[1] - a[1]).map(([o, a]) => `<div class="chain">${glink(o)}<span>${nf(a * 100, 0)}¢ на $1</span><em>${bn(C.gs[o].prod * a * pr)}</em></div>`).join('') || '<div class="mini">Только конечное потребление.</div>';
+  const tariff = tariffOf(C, gid);
+  const emb = alive(G).filter((X) => X.id !== G.player).map((X) => `<label class="embc"><input type="checkbox" data-k="tp.emb.${gid}>${X.id}" ${C.tp.emb[gid + '>' + X.id] ? 'checked' : ''}>${flagOf(X.id)}${X.short}</label>`).join('');
+  const self = s.prod / Math.max(1e-6, s.dem);
+  const sources = Object.entries(C.trade.imBy).length ? fl.filter((f) => f[1] === G.player).map(([a, , v]) => ({ label: `${flagOf(a)}${G.countries[a].short}`, value: v, color: '#4c8dff', act: 'partner', id: a, sub: pct(v / Math.max(1e-9, s.im * pr), 0) })) : [];
+  const buyers = fl.filter((f) => f[0] === G.player).map(([, b, v]) => ({ label: `${flagOf(b)}${G.countries[b].short}`, value: v, color: '#e8b64a', act: 'partner', id: b, sub: pct(v / Math.max(1e-9, s.ex * pr), 0) }));
+  return `
+  <div class="crumbs"><a data-act="tback">← Все товары</a><span>${GOOD_CATS[g.cat].name}</span></div>
+  <div class="ghead"><span class="gbig">${g.icon}</span><div><h3>${g.name}</h3><div class="gprice">${priceStr(gid)} <span class="${chg12(gid) >= 0 ? 'up' : 'down'}">${spct(chg12(gid))} за год</span> <span class="pill">${gm.lastExcess > 0.01 ? 'спрос превышает предложение' : gm.lastExcess < -0.01 ? 'избыток предложения' : 'рынок сбалансирован'}</span></div></div></div>
+  <section class="card"><h4>Мировая цена, ${g.unit}</h4><canvas data-chart="g_price" data-g="${gid}"></canvas></section>
+  <section class="kpis">${kpi('Производство', bn(s.prod * pr), 'загрузка ' + pct(s.prod / Math.max(1e-6, s.cap), 0))}${kpi('Потребление', bn(s.dem * pr), 'конечное ' + pct(G.fdK[gid] * s.F / Math.max(1e-6, s.dem), 0))}${kpi('Экспорт', bn(s.ex * pr), s.unsoldR > 0.02 ? `<span class="bad">не продано ${pct(s.unsoldR, 0)}</span>` : 'всё продано')}${kpi('Импорт', bn(s.im * pr), s.shortR > 0.02 ? `<span class="bad">дефицит ${pct(s.shortR, 0)}</span>` : 'спрос покрыт')}${kpi('Самообеспеченность', pct(self, 0), self >= 1 ? 'нетто-экспортёр' : 'нетто-импортёр')}${kpi('Внутренняя цена', nf(s.pLoc / pr * 100, 0) + '%', 'от мировой')}</section>
+  <section class="grid2">
+    <div class="card"><h4>Наш рынок, млрд $/год</h4><canvas data-chart="g_mine" data-g="${gid}"></canvas></div>
+    <div class="card"><h4>Мировое производство и торговля</h4><canvas data-chart="g_world" data-g="${gid}"></canvas></div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h4>Из чего производится</h4>${ins}${IO[gid] && Object.keys(IO[gid]).length ? `<div class="mini">Доступность сырья для нашего производства: <b class="${cls(s.avail > 0.95)}">${pct(s.avail, 0)}</b></div>` : ''}</div>
+    <div class="card"><h4>Где используется</h4>${outs}</div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h4>Кто производит</h4>${hbars(prodRows, bn)}</div>
+    <div class="card"><h4>Кто потребляет</h4>${hbars(demRows, bn)}</div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h4>Наши покупатели</h4>${buyers.length ? hbars(buyers, bn) : '<div class="mini">Мы не экспортируем этот товар.</div>'}</div>
+    <div class="card"><h4>Наши поставщики</h4>${sources.length ? hbars(sources, bn) : '<div class="mini">Мы не импортируем этот товар.</div>'}</div>
+  </section>
+  <section class="card"><h4>Мировые торговые потоки · ${bn(fTot)} в год</h4><div class="tblwrap"><table class="tbl flows"><tr><th>Экспортёр</th><th></th><th>Импортёр</th><th>Объём</th><th>Доля</th></tr>${flowRows || '<tr><td colspan="5" class="mini">Нет торговли — каждая страна обеспечивает себя сама.</td></tr>'}</table></div><div class="mini">Потоки показаны стрелками на карте: золотые — наш экспорт, синие — наш импорт. Цвет страны — нетто-экспорт (зелёный) или нетто-импорт (красный).</div></section>
+  <section class="card"><h4>Наша политика по товару «${g.name}»</h4>
+    ${slider('tp.tariff.' + gid, 'Импортная пошлина' + (C.tp.tariff[gid] == null ? ' (базовая)' : ' (особая)'), tariff, 0, 1, 0.01, pct(tariff, 0))}
+    ${C.tp.tariff[gid] != null ? `<button class="btn ghost" data-act="tpreset" data-id="${gid}">Вернуть базовую ставку (${pct(C.eco.tax.tariff, 0)})</button>` : ''}
+    ${slider('tp.duty.' + gid, 'Экспортная пошлина', C.tp.duty[gid] || 0, 0, 0.5, 0.01, pct(C.tp.duty[gid] || 0, 0), false, 'Доход бюджету, но наши поставки становятся менее конкурентными')}
+    ${slider('tp.sub.' + gid, 'Субсидия производителям, % выручки', C.tp.sub[gid] || 0, 0, 0.3, 0.01, pct(C.tp.sub[gid] || 0, 0) + ' · ' + bn((C.tp.sub[gid] || 0) * s.prod * pr) + '/год', false, 'Отрасль постепенно растёт, экспорт дешевеет для покупателей')}
+    <div class="row"><label><input type="checkbox" data-k="tp.ban.${gid}" ${C.tp.ban[gid] ? 'checked' : ''}> Запретить экспорт</label><span class="mini">Излишки остаются внутри — цены падают, производители теряют.</span></div>
+    <h5 style="margin-top:12px">Товарное эмбарго (не продаём и не покупаем)</h5><div class="embs">${emb}</div>
+  </section>`;
+}
+
+function partnerView(id) {
+  const C = P(), X = G.countries[id], T = C.trade;
+  const ex = T.exBy[id] || 0, im = T.imBy[id] || 0;
+  const exG = [], imG = [];
+  for (const g of GOODS) for (const [a, b, v] of G.flows[g.id] || []) {
+    if (a === G.player && b === id) exG.push({ label: `${g.icon} ${g.name}`, value: v, color: GOOD_CATS[g.cat].color, act: 'good', id: g.id });
+    if (a === id && b === G.player) imG.push({ label: `${g.icon} ${g.name}`, value: v, color: GOOD_CATS[g.cat].color, act: 'good', id: g.id });
+  }
+  exG.sort((a, b) => b.value - a.value); imG.sort((a, b) => b.value - a.value);
+  // зависимость партнёра от нас и наша от него
+  const dep = (from, to) => GOODS.map((g) => {
+    const f = (G.flows[g.id] || []).find((r) => r[0] === from && r[1] === to); if (!f) return null;
+    const dem = G.countries[to].gs[g.id].dem * gPrice(g.id);
+    return { g, share: f[2] / Math.max(1e-9, dem), v: f[2] };
+  }).filter((r) => r && r.share > 0.1).sort((a, b) => b.share - a.share);
+  const theirDep = dep(G.player, id), ourDep = dep(id, G.player);
+  const depRow = (r) => `<div class="chain">${glink(r.g.id)}<span>${pct(r.share, 0)} потребления</span><em>${bn(r.v)}</em></div>`;
+  const xT = X.trade;
+  const theirEx = GOODS.map((g) => ({ label: `${g.icon} ${g.name}`, value: xT.exG[g.id] || 0, color: GOOD_CATS[g.cat].color, act: 'good', id: g.id })).filter((r) => r.value > 0.01).sort((a, b) => b.value - a.value).slice(0, 8);
+  const theirIm = GOODS.map((g) => ({ label: `${g.icon} ${g.name}`, value: xT.imG[g.id] || 0, color: GOOD_CATS[g.cat].color, act: 'good', id: g.id })).filter((r) => r.value > 0.01).sort((a, b) => b.value - a.value).slice(0, 8);
+  const tags = [atWar(G, G.player, id) ? '<span class="pill bad">война</span>' : '', hasTreaty(G, 'trade', G.player, id) ? '<span class="pill gold">торговое соглашение</span>' : '', sanctioned(G, G.player, id) ? '<span class="pill bad">наши санкции</span>' : '', sanctioned(G, id, G.player) ? '<span class="pill bad">их санкции</span>' : '', hasTreaty(G, 'alliance', G.player, id) ? '<span class="pill">союз</span>' : ''].join('');
+  return `
+  <div class="crumbs"><a data-act="tback">← Торговля</a><span>Торговый профиль</span></div>
+  <div class="ghead"><span class="flag big" style="background:${X.color}"></span><div><h3>${X.name}</h3><div class="row">${relTag(G.rel[G.player][id])} ${tags}<button class="btn ghost" data-act="selc_go" data-id="${id}">Дипломатия →</button></div></div></div>
+  <section class="kpis">${kpi('Наш экспорт к ним', bn(ex), pct(ex / Math.max(1e-9, T.ex), 0) + ' нашего экспорта')}${kpi('Наш импорт от них', bn(im), pct(im / Math.max(1e-9, T.im), 0) + ' нашего импорта')}${kpi('Сальдо', `<span class="${cls(ex >= im)}">${bn(ex - im)}</span>`, '')}${kpi('Их ВВП', bn(X.eco.gdp), spct(X.eco.growth) + ' г/г')}${kpi('Их экспорт', bn(xT.ex), pct(xT.ex / X.eco.gdp, 0) + ' ВВП')}${kpi('Их импорт', bn(xT.im), pct(xT.im / X.eco.gdp, 0) + ' ВВП')}</section>
+  <section class="card"><h4>Двусторонняя торговля, млрд $/год</h4><canvas data-chart="p_bi" data-c="${id}"></canvas></section>
+  <section class="grid2">
+    <div class="card"><h4>Что мы им продаём</h4>${exG.length ? hbars(exG, bn) : '<div class="mini">Ничего.</div>'}</div>
+    <div class="card"><h4>Что мы у них покупаем</h4>${imG.length ? hbars(imG, bn) : '<div class="mini">Ничего.</div>'}</div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h4>Их зависимость от нас</h4>${theirDep.map(depRow).join('') || '<div class="mini">Критической зависимости нет.</div>'}<div class="mini">Эмбарго по этим товарам ударит по ним сильнее всего.</div></div>
+    <div class="card"><h4>Наша зависимость от них</h4>${ourDep.map(depRow).join('') || '<div class="mini">Критической зависимости нет.</div>'}<div class="mini">Если они введут санкции — здесь возникнут дефициты.</div></div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h4>Главный экспорт ${X.short}</h4>${hbars(theirEx, bn)}</div>
+    <div class="card"><h4>Главный импорт ${X.short}</h4>${hbars(theirIm, bn)}</div>
+  </section>
+  <section class="card"><h4>Экономика ${X.short}</h4><canvas data-chart="p_gdp" data-c="${id}"></canvas></section>`;
 }
 
 // ---------- графики ----------
@@ -437,10 +627,28 @@ function afterRender() {
   const h = P().hist;
   for (const cv of document.querySelectorAll('canvas[data-chart]')) {
     const k = cv.dataset.chart;
-    if (k === 'gdp') lineChart(cv, [{ data: h.gdp, color: '#e8b64a', fill: true }], { fmt: (v) => nf(v) });
-    if (k === 'infl') lineChart(cv, [{ name: 'Инфляция', data: h.infl.map((v) => v * 100), color: '#e0473e' }, { name: 'Безработица', data: h.unemp.map((v) => v * 100), color: '#4c8dff' }], { fmt: (v) => nf(v, 1) + '%', zero: true });
-    if (k === 'appr') lineChart(cv, [{ name: 'Одобрение', data: h.approval, color: '#3fbf6f' }, { name: 'Стабильность', data: h.stability, color: '#c9a0ff' }], { fmt: (v) => nf(v) });
-    if (k === 'debt') lineChart(cv, [{ name: 'Долг', data: h.debt.map((v) => v * 100), color: '#f2994a' }, { name: 'Дефицит', data: h.deficit.map((v) => v * 100), color: '#9aa4b2' }], { fmt: (v) => nf(v) + '%', zero: true });
+    if (k === 'gdp') lineChart(cv, [{ name: 'ВВП', data: h.gdp, color: '#e8b64a', fill: true }], { fmt: (v) => nf(v), labels: dateLbl });
+    if (k === 'infl') lineChart(cv, [{ name: 'Инфляция', data: h.infl.map((v) => v * 100), color: '#e0473e' }, { name: 'Безработица', data: h.unemp.map((v) => v * 100), color: '#4c8dff' }], { fmt: (v) => nf(v, 1) + '%', zero: true, labels: dateLbl });
+    if (k === 'appr') lineChart(cv, [{ name: 'Одобрение', data: h.approval, color: '#3fbf6f' }, { name: 'Стабильность', data: h.stability, color: '#c9a0ff' }], { fmt: (v) => nf(v), labels: dateLbl });
+    const C = P(), lab = dateLbl, gid = cv.dataset.g, cid = cv.dataset.c;
+    if (k === 'e_sect') lineChart(cv, [{ name: 'АПК', data: h.agri, color: '#7fb24a' }, { name: 'Добыча', data: h.mining, color: '#c77d3a' }, { name: 'Промышл.', data: h.industry, color: '#4c8dff' }, { name: 'Хай-тек', data: h.tech, color: '#b78cff' }, { name: 'Услуги', data: h.services, color: '#3fc1c9' }], { stacked: true, fmt: (v) => nf(v), labels: lab });
+    if (k === 'e_growth') lineChart(cv, [{ name: 'Рост г/г', data: h.gdp.map((v, i) => (i >= 12 ? (v / h.gdp[i - 12] - 1) * 100 : NaN)), color: '#e8b64a' }], { fmt: (v) => nf(v, 1) + '%', zero: true, labels: lab });
+    if (k === 'e_rate') lineChart(cv, [{ name: 'Ставка', data: h.rate.map((v) => v * 100), color: '#e8b64a' }, { name: 'Инфляция', data: h.infl.map((v) => v * 100), color: '#ef5a4f' }], { fmt: (v) => nf(v, 1) + '%', zero: true, labels: lab });
+    if (k === 'e_fx') lineChart(cv, [{ name: 'Курс (выше — слабее)', data: h.fx, color: '#3fc1c9' }, { name: 'Цены корзины ×100', data: h.cpi.map((v) => v * 100), color: '#f2994a' }], { fmt: (v) => nf(v), labels: lab });
+    if (k === 'e_unemp') lineChart(cv, [{ name: 'Безработица', data: h.unemp.map((v) => v * 100), color: '#4c8dff', fill: true }], { fmt: (v) => nf(v, 1) + '%', labels: lab });
+    if (k === 'e_conf') lineChart(cv, [{ name: 'Доверие', data: h.conf, color: '#43c37a', fill: true }], { fmt: (v) => nf(v), labels: lab });
+    if (k === 'b_revexp') lineChart(cv, [{ name: 'Доходы', data: h.rev, color: '#43c37a' }, { name: 'Расходы', data: h.exp, color: '#ef5a4f' }], { fmt: (v) => nf(v), labels: lab });
+    if (k === 'tr_exim') lineChart(cv, [{ name: 'Экспорт', data: h.ex, color: '#e8b64a' }, { name: 'Импорт', data: h.im, color: '#4c8dff' }, { name: 'Сальдо', data: h.ex.map((v, i) => v - h.im[i]), color: '#9aa4b2' }], { fmt: (v) => nf(v), zero: true, labels: lab });
+    if (k === 'tr_excat') lineChart(cv, CAT_ORDER.map((c) => ({ name: GOOD_CATS[c].name.split(' ')[0], data: sumSeries(GOODS.filter((g) => g.cat === c).map((g) => C.gh[g.id].ex)), color: GOOD_CATS[c].color })), { stacked: true, fmt: (v) => nf(v), labels: lab });
+    if (k === 'tr_catidx') lineChart(cv, CAT_ORDER.filter((c) => c !== 'services').map((c) => { const gs = GOODS.filter((g) => g.cat === c); const arr = sumSeries(gs.map((g) => G.goods[g.id].hist.map((v) => v / g.base * 100 / gs.length))); return { name: GOOD_CATS[c].name.split(' ')[0], data: arr, color: GOOD_CATS[c].color }; }), { fmt: (v) => nf(v), labels: lab });
+    if (k === 'g_price') lineChart(cv, [{ name: GOOD[gid].name, data: G.goods[gid].hist, color: GOOD_CATS[GOOD[gid].cat].color, fill: true }], { fmt: (v) => nf(v, v < 10 ? 2 : 0), labels: lab, height: 170 });
+    if (k === 'g_mine') { const gh = C.gh[gid]; lineChart(cv, [{ name: 'Производство', data: gh.prod, color: '#43c37a' }, { name: 'Потребление', data: gh.dem, color: '#ef5a4f' }, { name: 'Экспорт', data: gh.ex, color: '#e8b64a' }, { name: 'Импорт', data: gh.im, color: '#4c8dff' }], { fmt: (v) => nf(v, 1), labels: lab }); }
+    if (k === 'g_world') lineChart(cv, [{ name: 'Мировое производство', data: G.goods[gid].wprod, color: '#43c37a' }, { name: 'Мировая торговля', data: G.goods[gid].vol, color: '#e8b64a' }], { fmt: (v) => nf(v), zero: true, labels: lab });
+    if (k === 'p_bi') lineChart(cv, [{ name: 'Наш экспорт', data: C.ph[cid]?.ex || [], color: '#e8b64a' }, { name: 'Наш импорт', data: C.ph[cid]?.im || [], color: '#4c8dff' }], { fmt: (v) => nf(v, 1), zero: true, labels: lab });
+    if (k === 'p_gdp') { const X = G.countries[cid]; lineChart(cv, [{ name: 'ВВП', data: X.hist.gdp, color: X.color, fill: true }], { fmt: (v) => nf(v), labels: lab }); }
+    if (k === 'w_gdp') lineChart(cv, alive(G).map((X) => ({ name: X.short, data: X.hist.gdp, color: X.color })), { fmt: (v) => nf(v), labels: lab });
+    if (k === 'w_trade') lineChart(cv, CAT_ORDER.map((c) => ({ name: GOOD_CATS[c].name.split(' ')[0], data: sumSeries(GOODS.filter((g) => g.cat === c).map((g) => G.goods[g.id].vol)), color: GOOD_CATS[c].color })), { stacked: true, fmt: (v) => nf(v), labels: lab });
+    if (k === 'debt') lineChart(cv, [{ name: 'Долг', data: h.debt.map((v) => v * 100), color: '#f2994a' }, { name: 'Дефицит', data: h.deficit.map((v) => v * 100), color: '#9aa4b2' }], { fmt: (v) => nf(v) + '%', zero: true, labels: dateLbl });
   }
 }
 
@@ -449,14 +657,23 @@ function setPath(obj, path, v) { const ks = path.split('.'); let o = obj; for (l
 function onPanelInput(e) {
   const k = e.target.dataset.k; if (!k || e.target.type !== 'range') return;
   const C = P(), v = +e.target.value;
-  if (k === 'rate' || k === 'printing') C.eco[k] = v; else setPath(C.eco, k, v);
+  if (k === 'rate' || k === 'printing') C.eco[k] = v; else if (k.startsWith('tp.')) setPath(C, k, v); else setPath(C.eco, k, v);
   const show = document.querySelector(`[data-show="${k}"]`);
-  if (show) show.textContent = k.startsWith('spend.') ? pct(v, 1) + ' · ' + bn(v * C.eco.gdp) : k === 'printing' ? pct(v) + ' ВВП/год' : pct(v, k === 'rate' ? 2 : 1);
+  if (show) show.textContent = k.startsWith('spend.') ? pct(v, 1) + ' · ' + bn(v * C.eco.gdp) : k === 'printing' ? pct(v) + ' ВВП/год' : k.startsWith('tp.') ? pct(v, 0) : pct(v, k === 'rate' ? 2 : 1);
   const bs = $('#bsum'); if (bs) bs.innerHTML = budgetSummary(C);
 }
 function onPanelChange(e) {
   const k = e.target.dataset.k; const C = P();
   if (k === 'autoRate') { C.eco.autoRate = e.target.checked; renderTab(); }
+  if (k && k.startsWith('tp.') && e.target.type === 'checkbox') {
+    const [, kind, key] = k.match(/^tp\.(\w+)\.(.+)$/);
+    if (e.target.checked) C.tp[kind][key] = true; else delete C.tp[kind][key];
+    if (kind === 'ban' && e.target.checked) { const g = GOOD[key]; if (g.cat === 'agri' || key === 'food') addGroupMod(C, 'farmers', -6, 12); else addGroupMod(C, 'business', -4, 12); log(G, `Запрет экспорта: ${g.name}.`, 'law'); }
+    if (kind === 'emb') { const [gid, cid] = key.split('>'); const d = e.target.checked ? -6 : 3; G.rel[cid][G.player] = Math.max(-100, Math.min(100, G.rel[cid][G.player] + d)); if (e.target.checked) log(G, `Эмбарго на ${GOOD[gid].name.toLowerCase()} против ${G.countries[cid].short}.`, 'diplo'); }
+    toast('Торговая политика изменена — эффект со следующего месяца', 'good');
+    renderTab();
+  }
+  if (k && k.startsWith('tp.') && e.target.type === 'range') renderTab();
   if (k === 'mobilized') {
     C.mil.mobilized = e.target.checked;
     if (C.mil.mobilized) { addGroupMod(C, 'workers', -6, 12); addGroupMod(C, 'youth', -10, 12); addGroupMod(C, 'siloviki', 6, 12); log(G, 'Объявлена мобилизация.', 'war'); }
@@ -470,6 +687,14 @@ function onPanelClick(e) {
   let r = null;
   switch (act) {
     case 'lawcat': lawCat = id; break;
+    case 'good': tradeView = { v: 'good', id }; tab = 'trade'; $('#panel').scrollTop = 0; break;
+    case 'good_go': tradeView = { v: 'good', id }; tab = 'trade'; $('#panel').scrollTop = 0; break;
+    case 'partner': if (id === G.player) break; tradeView = { v: 'partner', id }; tab = 'trade'; map.select(id); $('#panel').scrollTop = 0; break;
+    case 'tback': tradeView = { v: 'list' }; map.select(null); break;
+    case 'tab_trade': tab = 'trade'; tradeView = { v: 'list' }; break;
+    case 'tcat': tradeCat = id; break;
+    case 'tsort': tradeSort = { k: id, d: tradeSort.k === id ? -tradeSort.d : -1 }; break;
+    case 'tpreset': delete C.tp.tariff[id]; break;
     case 'pass': r = passLaw(G, C, id); break;
     case 'pass_lobby': r = passLaw(G, C, id, { lobby: true }); break;
     case 'repeal': r = repealLaw(G, C, id); break;
@@ -500,6 +725,7 @@ function decree(C, id) {
 }
 
 function onProvClick(p) {
+  if (tab === 'trade') { if (p.owner === G.player) { tradeView = { v: 'list' }; map.select(null); } else { tradeView = { v: 'partner', id: p.owner }; map.select(p.owner); } renderTab(); return; }
   if (p.owner === G.player) { tab = 'overview'; map.select(null); }
   else { selC = p.owner; tab = 'diplomacy'; map.select(p.owner); }
   renderTab();
@@ -509,7 +735,8 @@ function onHover(p, ev) {
   const t = $('#tip');
   if (!p) { t.hidden = true; return; }
   const C = G.countries[p.owner], ctrl = G.countries[p.ctrl];
-  const res = [p.res.oil > 0 ? 'нефть' : '', p.res.gas > 0 ? 'газ' : '', p.res.metals > 0 ? 'металлы' : ''].filter(Boolean).join(', ');
+  const RN = { oil: 'нефть', gas: 'газ', coal: 'уголь', iron: 'руда', copper: 'медь', rare: 'редкоземы', timber: 'лес' };
+  const res = Object.keys(RN).filter((k) => (p.res[k] || 0) > 0.05).map((k) => RN[k]).join(', ');
   t.innerHTML = `<b>${C.short}</b>${p.capital ? ' ★ столица' : ''}<br>${TERR[p.terrain]}${res ? ' · ' + res : ''}${p.ctrl !== p.owner ? `<br><span class="bad">Оккупировано: ${ctrl.short}</span>` : ''}${p.core !== p.owner ? `<br><small>Исторически: ${G.countries[p.core].short}</small>` : ''}${p.owner !== G.player ? `<br>Отношения: ${nf(G.rel[G.player][p.owner])}` : ''}`;
   t.hidden = false;
   const r = $('#mapwrap').getBoundingClientRect();

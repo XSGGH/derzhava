@@ -46,8 +46,8 @@ export const EVENTS = {
   },
   oil_found: {
     title: () => 'Открыто месторождение', p: 0.006, cond: () => true,
-    text: (G, C, ev) => `Геологи нашли крупное месторождение ${ev.kind === 'oil' ? 'нефти' : ev.kind === 'gas' ? 'газа' : 'руд'}.`,
-    init: (G, C, ev) => { ev.kind = pick(['oil', 'gas', 'metals']); },
+    text: (G, C, ev) => `Геологи нашли крупное месторождение: ${{ oil: 'нефть', gas: 'газ', iron: 'железная руда', copper: 'медь', rare: 'редкоземельные металлы', coal: 'уголь' }[ev.kind]}.`,
+    init: (G, C, ev) => { ev.kind = pick(['oil', 'gas', 'iron', 'copper', 'rare', 'coal']); },
     choices: [
       { t: 'Государственная разработка (0,5% ВВП)', eff: (G, C, ev) => { addRes(G, C, ev.kind, 1.4); pctGdp(C, 0.005); } },
       { t: 'Концессия иностранцам', hint: 'Бесплатно, но меньше выгоды', eff: (G, C, ev) => { addRes(G, C, ev.kind, 0.9); gm(C, 'business', 5); gm(C, 'siloviki', -4); } },
@@ -159,7 +159,7 @@ export const EVENTS = {
   world_recession: {
     global: true, title: () => 'Мировая рецессия', p: 0.004,
     text: () => 'Обвал на биржах Аурелии спровоцировал мировой кризис. Спрос падает везде.',
-    apply: (G) => { G.worldShock -= 0.04; for (const k of ['oil', 'gas', 'metals']) G.markets[k].shock *= 0.75; },
+    apply: (G) => { G.worldShock -= 0.04; },
     choices: [
       { t: 'Антикризисный пакет (2% ВВП)', eff: (G, C) => { pctGdp(C, 0.02); C.eco.shock += 0.025; } },
       { t: 'Бюджетная дисциплина', eff: (G, C) => { gm(C, 'business', 4); gm(C, 'workers', -6); } },
@@ -168,7 +168,7 @@ export const EVENTS = {
   oil_shock: {
     global: true, title: () => 'Нефтяной шок', p: 0.005,
     text: () => 'Конфликт в проливах перекрыл танкерные маршруты. Нефть и газ резко дорожают.',
-    apply: (G) => { G.markets.oil.shock *= 1.5; G.markets.gas.shock *= 1.4; },
+    apply: (G) => { G.goods.oil.shock *= 1.35; G.goods.gas.shock *= 1.25; },
     choices: [{ t: 'Понятно', eff: () => {} }, { t: 'Субсидировать топливо (0,5% ВВП)', eff: (G, C) => { pctGdp(C, 0.005); C.eco.infl -= 0.01; gm(C, 'workers', 4); } }],
   },
   pandemic: {
@@ -183,8 +183,8 @@ export const EVENTS = {
   grain_crisis: {
     global: true, title: () => 'Мировой продовольственный кризис', p: 0.004,
     text: () => 'Неурожай в нескольких регионах мира: цены на зерно взлетели.',
-    apply: (G) => { G.markets.grain.shock *= 1.5; },
-    choices: [{ t: 'Понятно', eff: () => {} }, { t: 'Запретить экспорт зерна', eff: (G, C) => { C.eco.infl -= 0.01; gm(C, 'farmers', -8); } }],
+    apply: (G) => { G.goods.grain.shock *= 1.35; },
+    choices: [{ t: 'Понятно', eff: () => {} }, { t: 'Запретить экспорт зерна', hint: 'Внутренние цены упадут, аграрии потеряют', eff: (G, C) => { C.tp.ban.grain = true; gm(C, 'farmers', -8); log(G, 'Введён запрет на экспорт зерна (отменить можно во вкладке «Торговля»).', 'law'); } }],
   },
   tech_boom: {
     global: true, title: () => 'Технологический бум', p: 0.004,
@@ -197,8 +197,8 @@ export const EVENTS = {
 function addRes(G, C, kind, amt) {
   const own = G.provs.filter((p) => p.land && p.owner === C.id);
   const p = pick(own); if (!p) return;
-  p.res[kind] += amt;
-  if (!C.eco.miningCap) C.eco.miningCap = C.eco.gdp * 0.01;
+  p.res[kind] = (p.res[kind] || 0) + amt; p.res.metals = (p.res.iron || 0) + (p.res.copper || 0);
+  if (!C.eco.miningCap) C.eco.miningCap = C.eco.gdp * 0.005;
 }
 
 export function eventsStep(G) {

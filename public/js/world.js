@@ -1,5 +1,6 @@
 // ===== Генерация карты и начального состояния мира =====
-import { COUNTRIES, PARTIES, GROUPS, COMMODITIES, GOV, START_YEAR, LAW_BY_ID } from './data.js';
+import { COUNTRIES, PARTIES, GROUPS, GOV, START_YEAR, LAW_BY_ID } from './data.js';
+import { initTrade } from './trade.js';
 import { makeRng, seedRng, clamp } from './rng.js';
 
 export const W = 34, H = 22;
@@ -84,11 +85,16 @@ export function generateMap(seed = 20300101) {
     else if (m < 0.3) t = 'forest';
     p.terrain = t;
     const b = byId[p.owner].res;
-    const res = { oil: 0, gas: 0, metals: 0, grain: 0 };
+    const res = { oil: 0, gas: 0, metals: 0, grain: 0, coal: 0, iron: 0, copper: 0, rare: 0, timber: 0 };
     const tb = { desert: [1.6, 1, 0.6], tundra: [1, 1.8, 0.8], mountain: [0.4, 0.5, 2], forest: [0.7, 0.8, 1], plain: [0.8, 0.8, 0.6] }[t];
     if (rng() < (b.oil || 0) * 0.6 * tb[0]) res.oil = 0.5 + rng();
     if (rng() < (b.gas || 0) * 0.6 * tb[1]) res.gas = 0.5 + rng();
-    if (rng() < (b.metals || 0) * 0.6 * tb[2]) res.metals = 0.5 + rng();
+    if (rng() < (b.metals || 0) * 0.6 * tb[2]) res.iron = 0.5 + rng();
+    if (rng() < (b.metals || 0) * 0.35 * tb[2]) res.copper = 0.4 + rng();
+    if (rng() < (b.rare || 0) * 0.35 * (t === 'mountain' ? 2 : 0.7)) res.rare = 0.4 + rng();
+    if (rng() < (b.coal || 0) * 0.5 * ({ tundra: 1.2, forest: 1.2, mountain: 1.4, plain: 0.7, desert: 0.3 }[t])) res.coal = 0.5 + rng();
+    if (t === 'forest' || t === 'tundra') res.timber = (0.3 + rng()) * (0.4 + (b.timber || 0));
+    res.metals = res.iron + res.copper;
     res.grain = { plain: 1, forest: 0.45, mountain: 0.2, desert: 0.12, tundra: 0.15 }[t] * (0.7 + 0.6 * rng());
     p.res = res;
     p.popW = { plain: 1, forest: 0.7, mountain: 0.45, desert: 0.3, tundra: 0.25 }[t] * (0.6 + 0.8 * rng());
@@ -98,10 +104,11 @@ export function generateMap(seed = 20300101) {
     const cp = provs[idx(...k.cap)]; cp.capital = true; cp.popW *= 5;
     for (const [c, r] of neighbors(...k.cap)) if (provs[idx(c, r)].owner === k.id) provs[idx(c, r)].popW *= 1.6;
     // у каждого ресурсного профиля — хотя бы одно месторождение
-    for (const key of ['oil', 'gas', 'metals']) {
-      if ((k.res[key] || 0) > 0 && !provs.some((p) => p.owner === k.id && p.res[key] > 0)) {
+    for (const key of ['oil', 'gas', 'iron', 'coal', 'rare']) {
+      const bias = key === 'iron' ? k.res.metals : k.res[key];
+      if ((bias || 0) > 0 && !provs.some((p) => p.owner === k.id && p.res[key] > 0)) {
         const own = provs.filter((p) => p.owner === k.id && !p.capital); const p = own[Math.floor(rng() * own.length)] || cp;
-        p.res[key] = 0.8 + rng();
+        p.res[key] = 0.8 + rng(); p.res.metals = p.res.iron + p.res.copper;
       }
     }
   }
@@ -118,9 +125,8 @@ export function createWorld(playerId, opts = {}) {
   const G = {
     version: 1, seed, turn: 0, year: START_YEAR, month: 0, player: playerId, difficulty: opts.difficulty || 'normal',
     provs, countries: {}, rel: {}, treaties: { trade: {}, nap: {}, alliance: {} }, sanctions: {}, wars: [],
-    markets: {}, log: [], pendingEvents: [], cooldowns: {}, gameOver: null, flags: {}, worldShock: 0, globalRate: 0.03,
+    log: [], pendingEvents: [], cooldowns: {}, gameOver: null, flags: {}, worldShock: 0, globalRate: 0.03,
   };
-  for (const [k, v] of Object.entries(COMMODITIES)) G.markets[k] = { price: v.base, shock: 1, hist: [] };
 
   for (const d of COUNTRIES) {
     const gdp = d.pop * d.gdppc;
@@ -149,24 +155,13 @@ export function createWorld(playerId, opts = {}) {
         pc: 40, nextElection: 0, lowStab: 0, warWeariness: 0, lastElection: null, termMonths: 0,
       },
       mil: { equip: 0, mobilized: false, morale: 1 },
-      hist: { gdp: [], gdppc: [], infl: [], unemp: [], approval: [], debt: [], stability: [], deficit: [], rate: [] },
+      hist: { gdp: [], gdppc: [], infl: [], unemp: [], approval: [], debt: [], stability: [], deficit: [], rate: [], agri: [], industry: [], services: [], tech: [], mining: [], fx: [], ex: [], im: [], rev: [], exp: [], cpi: [], conf: [] },
     };
     // выборы: случайная фаза цикла
     const every = GOV[d.gov].electionEvery; C.pol.nextElection = every ? 12 + Math.floor((d.cap[0] * 7) % (every - 12)) : 0;
     G.countries[d.id] = C;
   }
-  // калибровка добычи и торговли
-  for (const C of Object.values(G.countries)) {
-    const r = countryResources(G, C.id);
-    const val = r.oil * G.markets.oil.price / 80 + r.gas * G.markets.gas.price / 300 + r.metals * G.markets.metals.price / 100;
-    C.eco.miningCap = val > 0 ? C.eco.miningTarget / val : 0;
-    C.eco.grain0 = r.grain || 1;
-  }
-  // базовые спрос/предложение сырья
   G.base = { worldGdp: Object.values(G.countries).reduce((a, c) => a + c.eco.gdp, 0) };
-  const sup = supplies(G);
-  G.base.supply = sup;
-
   // отношения
   for (const a of COUNTRIES) {
     G.rel[a.id] = {};
@@ -185,6 +180,8 @@ export function createWorld(playerId, opts = {}) {
   G.treaties.trade[pairKey('mirena', 'aurelia')] = true;
   G.treaties.nap[pairKey('zarakhan', 'kargas')] = true;
   for (const a of COUNTRIES) for (const b of COUNTRIES) if (a.id !== b.id) G.rel[a.id][b.id] = clamp(G.rel[a.id][b.id] + (G.treaties.trade[pairKey(a.id, b.id)] ? 10 : 0), -100, 100);
+  G._borders = bordersOf(G);
+  initTrade(G);
   return G;
 }
 
@@ -201,25 +198,23 @@ export function baseRelation(G, a, b) {
   return clamp(Math.round(v), -100, 100);
 }
 
+const RES_KEYS = ['oil', 'gas', 'metals', 'grain', 'coal', 'iron', 'copper', 'rare', 'timber'];
 export function countryResources(G, id) {
-  const r = { oil: 0, gas: 0, metals: 0, grain: 0, provs: 0, popW: 0 };
+  const r = { provs: 0, popW: 0 }; for (const k of RES_KEYS) r[k] = 0;
   for (const p of G.provs) {
     if (!p.land || p.ctrl !== id) continue;
     r.provs++; r.popW += p.popW;
-    for (const k of ['oil', 'gas', 'metals', 'grain']) r[k] += p.res[k] * (p.owner === id ? 1 : 0.5);
+    for (const k of RES_KEYS) r[k] += (p.res[k] || 0) * (p.owner === id ? 1 : 0.5);
   }
   return r;
 }
-
-export function supplies(G) {
-  const s = { oil: 0, gas: 0, metals: 0, grain: 0 };
-  for (const C of Object.values(G.countries)) {
-    if (!C.alive) continue;
-    const r = countryResources(G, C.id);
-    const war = G.wars.some((w) => w.sideA.includes(C.id) || w.sideB.includes(C.id)) ? 0.85 : 1;
-    const eff = C.eco.miningEff || 1;
-    for (const k of ['oil', 'gas', 'metals']) s[k] += r[k] * war * eff;
-    s.grain += r.grain * war;
+export function bordersOf(G) {
+  const B = {};
+  for (const id in G.countries) B[id] = new Set();
+  for (const p of G.provs) {
+    if (!p.land) continue;
+    for (const [c, r] of neighbors(p.col, p.row)) { const q = G.provs[idx(c, r)]; if (q.land && q.owner !== p.owner) B[p.owner].add(q.owner); }
   }
-  return s;
+  return B;
 }
+

@@ -1,6 +1,7 @@
 // ===== Ядро симуляции: экономика, бюджет, общество, политика, армия, войны =====
-import { GROUPS, PARTIES, GOV, LAW_BY_ID, COMMODITIES, END_YEAR } from './data.js';
-import { countryResources, supplies, neighbors, idx, pairKey, W } from './world.js';
+import { GROUPS, PARTIES, GOV, LAW_BY_ID, END_YEAR } from './data.js';
+import { countryResources, neighbors, idx, pairKey, W } from './world.js';
+import { tradeStep, price, tariffOf } from './trade.js';
 import { rnd, rr, clamp, chance } from './rng.js';
 
 export const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -62,24 +63,6 @@ function tradeAccess(G, C) {
   return { access: sw ? sm / sw : 1, sanctLoss: world ? sanct / world : 0 };
 }
 
-// ---------- рынки сырья ----------
-function marketsStep(G) {
-  const sup = supplies(G);
-  const wg = alive(G).reduce((a, c) => a + c.eco.gdp, 0);
-  const dRatio = wg / G.base.worldGdp;
-  for (const k of Object.keys(COMMODITIES)) {
-    const m = G.markets[k];
-    const sRatio = Math.max(0.2, sup[k] / Math.max(0.01, G.base.supply[k]));
-    const dem = k === 'grain' ? Math.pow(dRatio, 0.3) : Math.pow(dRatio, 0.6);
-    const target = COMMODITIES[k].base * Math.pow(dem / sRatio, 1.8) * m.shock;
-    const prev = m.price;
-    m.price += (target - m.price) * 0.25;
-    m.chg = (m.chg || 0) + (clamp(Math.pow(m.price / prev, 12) - 1, -0.8, 1.5) - (m.chg || 0)) * 0.15; // годовой темп изменения цены
-    m.shock += (1 - m.shock) * 0.05;
-    m.hist.push(Math.round(m.price * 10) / 10); if (m.hist.length > 360) m.hist.shift();
-  }
-}
-
 // ---------- военная мощь ----------
 export function strength(G, C) {
   const M = lawMods(C);
@@ -102,14 +85,15 @@ export function budget(G, C, M = lawMods(C)) {
   const t = e.tax, sp = e.spend;
   const rateLoad = t.inc + (t.pay || 0) * 0.6 + t.corp * 0.5 + t.vat;
   const compl = clamp(1 - s.corruption / 220 - Math.max(0, rateLoad - 0.9) * 0.4 + M.compliance, 0.35, 1.05);
-  const tariff = Math.min(t.tariff, M.tariffCap || 1);
+  const T = C.trade || {};
   const rev = {
     inc: t.inc * 0.42 * gdp * compl * (1 + M.incBoost) * (1 - e.unemp * 0.6),
     pay: (t.pay || 0) * 0.42 * gdp * compl * (1 - e.unemp * 0.6),
     corp: t.corp * 0.16 * gdp * Math.max(0.3, 1 + e.gap * 2) * compl,
     vat: t.vat * 0.5 * gdp * compl,
     res: Math.min(0.9, t.res * (1 + M.resRent)) * e.miningOut,
-    tariff: tariff * e.im,
+    tariff: T.tariffRev || 0,
+    duty: T.dutyRev || 0,
   };
   const nWars = wars(G, C.id).length;
   const exp = {
@@ -119,6 +103,7 @@ export function budget(G, C, M = lawMods(C)) {
     subsidies: (sp.subAgri + sp.subInd + sp.subTech) * gdp,
     admin: e.admin * gdp * (1 + s.corruption / 200),
     programs: M.spendExtra * gdp,
+    tradeSub: T.subCost || 0,
     war: (0.015 * nWars + (C.mil.mobilized ? 0.012 : 0)) * gdp,
     interest: Math.max(0, e.debt) * e.debtRate,
   };
@@ -130,7 +115,6 @@ export function budget(G, C, M = lawMods(C)) {
 // ---------- экономический шаг ----------
 function econStep(G, C, M) {
   const e = C.eco, s = C.soc, pol = C.pol;
-  const r = countryResources(G, C.id);
   let ownedW = 0, ctrlW = 0;
   for (const p of G.provs) if (p.land && p.owner === C.id) { ownedW += p.popW; if (p.ctrl === C.id) ctrlW += p.popW; }
   const occLoss = ownedW ? 1 - ctrlW / ownedW : 0;
@@ -140,13 +124,12 @@ function econStep(G, C, M) {
   e.accessLoss = clamp((e.access0 - acc.access) / e.access0, 0, 1);
   e.sanctLoss = acc.sanctLoss;
   const nWars = wars(G, C.id).length;
-  const mk = G.markets;
-
-  // добыча
-  const pv = r.oil * mk.oil.price / 80 + r.gas * mk.gas.price / 300 + r.metals * mk.metals.price / 100;
-  e.miningOut = e.miningCap * e.miningEff * pv * (1 - 0.45 * acc.sanctLoss);
-  const grainIdx = Math.pow(mk.grain.price / 250, 0.5) * (e.grain0 ? clamp(r.grain / e.grain0, 0.2, 1.6) : 1);
-  const energyIdx = (mk.oil.price / 80 + mk.gas.price / 300) / 2;
+  const T = C.trade;
+  e.tariffCap = M.tariffCap || 1;
+  // добыча и аграрный сектор — из товарных рынков
+  e.miningOut = T.miningOut;
+  const grainIdx = T.agriIdx;
+  const energyIdx = ((C.gs.fuel?.pLoc || 1) + (C.gs.gas?.pLoc || 1)) / 2;
   const energyExporter = (e.miningTarget / e.gdp0) > 0.12;
 
   // потенциальный рост
@@ -170,7 +153,7 @@ function econStep(G, C, M) {
   };
   for (const k in g) { g[k] = clamp(g[k], -0.12, 0.14); e.P[k] *= 1 + g[k] / 12; }
   e.sectorG = g;
-  const pvNorm = (r.oil + r.gas + r.metals) > 0 ? pv / (r.oil + r.gas + r.metals) : 1;
+  const pvNorm = T.rawPriceIdx || 1;
   e.miningEff *= 1 + clamp(0.004 + 0.025 * (pvNorm - 1) + M.growthMining + 0.1 * (invest - 0.2) - 0.03 * e.accessLoss, -0.1, 0.1) / 12;
 
   // разрыв выпуска (спрос)
@@ -182,15 +165,14 @@ function econStep(G, C, M) {
   e.shock *= 0.9;
 
   const prevGdp = e.gdp;
-  const nonMining = e.P.agri * grainIdx + e.P.industry + e.P.services + e.P.tech;
+  const nonMining = e.P.agri * grainIdx + e.P.industry * T.U.industry + e.P.services * T.U.services + e.P.tech * T.U.tech;
   e.gdp = Math.max(1, (nonMining * (1 + e.gap) + e.miningOut * (1 + 0.3 * e.gap)) * (1 - occLoss * 0.7));
   e.growthM = e.gdp / prevGdp - 1;
 
   // инфляция
   const cred = clamp(0.25 + M.credibility + (C.gov === 'democracy' ? 0.08 : 0), 0.1, 0.8);
-  const food = 0.12 * (mk.grain.chg || 0);
-  const energy = energyExporter ? 0 : 0.07 * ((mk.oil.chg || 0) + (mk.gas.chg || 0)) / 2;
-  const piStar = (1 - cred) * e.inflExp + cred * 0.03 + 0.5 * e.gap + 1.2 * e.printing + 0.3 * Math.max(-0.1, e.fxReal || 0) + food + energy + M.inflation + 0.04 * e.accessLoss;
+  const goodsPx = 0.3 * (e.cpiChg || 0) + 0.15 * (T.shortIdx || 0); // цены товарной корзины и дефициты
+  const piStar = (1 - cred) * e.inflExp + cred * 0.03 + 0.5 * e.gap + 1.2 * e.printing + 0.3 * Math.max(-0.1, e.fxReal || 0) + goodsPx + M.inflation + 0.04 * e.accessLoss;
   e.infl = clamp(e.infl + (piStar - e.infl) * 0.25, -0.05, 4);
   e.inflExp += (e.infl - e.inflExp) * (0.13 - cred * 0.08);
   e.pl = (e.pl || 1) * Math.exp((e.infl - 0.03) / 12);
@@ -206,16 +188,8 @@ function econStep(G, C, M) {
   e.nairu = nairu;
   e.unemp = clamp(e.unemp + (nairu - 0.5 * e.gap + 0.3 * occLoss - e.unemp) * 0.15, 0.015, 0.45);
 
-  // торговля
-  const realFx = e.fx / e.pl;
-  const comp = Math.pow(realFx / 100, 0.4);
-  const open = clamp(e.open * (1 + M.openness), 0.05, 0.9);
-  const tradables = e.P.industry + e.P.tech + 0.12 * e.P.services + 0.25 * e.P.agri * grainIdx;
-  const tariff = Math.min(e.tax.tariff, M.tariffCap || 1);
-  e.ex = tradables * open * acc.access * comp * (1 + e.gap * 0.3) + 0.7 * e.miningOut;
-  const impBase = e.gdp * Math.pow(1 - tariff, 1.5) / comp * Math.max(0.3, acc.access) * (1 + 0.5 * e.gap);
-  if (!e.calibrated) { e.impProp = clamp((e.ex - e.tbInit * e.gdp) / impBase, 0.05, 1.2); }
-  e.im = impBase * e.impProp;
+  // торговля — сумма двусторонних товарных потоков
+  e.ex = T.ex; e.im = T.im;
   const tb = (e.ex - e.im) / e.gdp;
   e.tbLag += (tb - e.tbLag) * 0.2;
   e.reserves = Math.max(0, e.reserves + (e.ex - e.im) / 12 * 0.2);
@@ -259,8 +233,8 @@ function econStep(G, C, M) {
 
   // доверие бизнеса
   const confT = clamp(52 + (e.growth - 0.02) * 400 - Math.max(0, e.infl - 0.04) * 150 - s.corruption / 4 + 12 - 25 * e.accessLoss - 10 * nWars
-    + M.confidence + (pol.stability - 50) / 4 - Math.max(0, debtGdp - 1) * 15, 0, 100);
-  e.conf += (confT - e.conf) * 0.1;
+    + M.confidence + (pol.stability - 50) / 4 - Math.max(0, debtGdp - 1) * 15 + (e.confOff || 0), 0, 100);
+  if (e.confOff == null) { e.confOff = e.conf - confT; } else e.conf += (confT - e.conf) * 0.1;
 
   // неравенство
   const giniT = clamp(0.25 + s.corruption / 400 - 0.6 * (Math.max(0, e.spend.social - M.socialSave) - 0.1) + M.gini + 0.3 * Math.max(0, e.unemp - 0.06) + Math.max(0, e.infl - 0.08) * 0.2, 0.2, 0.65);
@@ -281,8 +255,12 @@ function econStep(G, C, M) {
     infra: (15 + e.spend.infra * 1600) * effK + M.infraT,
     science: (10 + e.spend.science * 2500) * effK + M.sciT,
   };
-  for (const k in stockT) s[k] = clamp(s[k] + (clamp(stockT[k], 0, 100) - s[k]) / 40, 0, 100);
-  const corrT = clamp(s.corrBase + M.corruption - (s.freedom - GOV[C.gov].freedom) * 0.1 - 200 * (e.spend.security - 0.02), 3, 95);
+  // стартовое равновесие: при исходной политике индексы не дрейфуют, меняются только от решений
+  if (!s.off) { s.off = {}; for (const k in stockT) s.off[k] = s[k] - stockT[k]; }
+  for (const k in stockT) s[k] = clamp(s[k] + (clamp(stockT[k] + s.off[k], 0, 100) - s[k]) / 40, 0, 100);
+  const corrRaw = s.corrBase + M.corruption - (s.freedom - GOV[C.gov].freedom) * 0.1 - 200 * (e.spend.security - 0.02);
+  if (s.corrOff == null) s.corrOff = s.corruption - corrRaw;
+  const corrT = clamp(corrRaw + s.corrOff, 3, 95);
   s.corruption += (corrT - s.corruption) / 60;
   s.freedom += (clamp(GOV[C.gov].freedom + M.freedom, 2, 98) - s.freedom) * 0.2;
 
@@ -306,7 +284,7 @@ export function indicators(C, M) {
     defense: clamp(20 + sp.defense * 1300, 0, 100),
     security: clamp(30 + sp.security * 2200, 0, 100),
     agri: clamp(30 + sp.subAgri * 3500, 0, 100),
-    tariff: clamp(30 + e.tax.tariff * 350, 0, 100),
+    tariff: clamp(30 + ['grain', 'meat', 'fruit', 'cotton', 'food'].reduce((a, g) => a + (C.tp ? tariffOf(C, g) : e.tax.tariff), 0) / 5 * 350 - ['grain', 'meat', 'fruit', 'cotton', 'food'].filter((g) => C.tp?.ban[g]).length * 12, 0, 100),
     rate: clamp(100 - e.rate * 500, 0, 100),
     ineq: clamp(100 - (e.gini - 0.25) * 250, 0, 100),
     order: clamp(100 - s.freedom * 0.6, 0, 100),
@@ -518,7 +496,7 @@ function milStep(G, C) {
   const e = C.eco;
   const eff = 1 - C.soc.corruption / 250;
   if (!C.mil.equip) C.mil.equip = e.spend.defense * e.gdp * eff / 0.1;
-  C.mil.equip += (e.spend.defense * e.gdp * eff) / 12 - C.mil.equip * 0.1 / 12;
+  C.mil.equip += (e.spend.defense * e.gdp * eff * (C.trade?.armsAvail ?? 1)) / 12 - C.mil.equip * 0.1 / 12;
   if (!wars(G, C.id).length) { C.mil.morale += (1 - C.mil.morale) * 0.1; }
 }
 
@@ -658,7 +636,7 @@ export function step(G) {
   if (G.gameOver) return;
   G.turn++;
   computeBorders(G);
-  marketsStep(G);
+  tradeStep(G);
   G.worldShock *= 0.92;
   for (const C of alive(G)) {
     const M = lawMods(C);
@@ -683,6 +661,8 @@ function recordHist(C) {
   push('gdp', e.gdp); push('gdppc', e.gdp / C.pop); push('infl', e.infl); push('unemp', e.unemp);
   push('approval', C.pol.approval); push('debt', e.debt / e.gdp); push('stability', C.pol.stability);
   push('deficit', e.budget.deficitGdp || 0); push('rate', e.rate);
+  push('agri', e.P.agri * (C.trade?.agriIdx || 1)); push('industry', e.P.industry * (C.trade?.U?.industry || 1)); push('services', e.P.services); push('tech', e.P.tech * (C.trade?.U?.tech || 1)); push('mining', e.miningOut);
+  push('fx', e.fx); push('ex', e.ex); push('im', e.im); push('rev', e.budget.R || 0); push('exp', e.budget.X || 0); push('cpi', e.cpi || 1); push('conf', e.conf);
 }
 
 function crisisCheck(G, C, M) {
