@@ -3,86 +3,56 @@ import { COUNTRIES, PARTIES, GROUPS, GOV, START_YEAR, LAW_BY_ID } from './data.j
 import { initTrade } from './trade.js';
 import { makeRng, seedRng, clamp } from './rng.js';
 
-export const W = 34, H = 22;
+import { buildGeometry, MW, MH } from './geo.js';
 
-export function neighbors(col, row) {
-  const odd = row & 1;
-  const d = odd
-    ? [[1, 0], [0, -1], [1, -1], [-1, 0], [0, 1], [1, 1]]
-    : [[1, 0], [-1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
-  const out = [];
-  for (const [dc, dr] of d) {
-    const c = col + dc, r = row + dr;
-    if (c >= 0 && c < W && r >= 0 && r < H) out.push([c, r]);
-  }
-  return out;
-}
-function toCube(col, row) { const x = col - (row - (row & 1)) / 2; const z = row; return [x, -x - z, z]; }
-export function hexDist(a, b) {
-  const [x1, y1, z1] = toCube(a[0], a[1]); const [x2, y2, z2] = toCube(b[0], b[1]);
-  return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
-}
-export const idx = (c, r) => r * W + c;
-
-function valueNoise(rng, cell) {
-  const gw = Math.ceil(W / cell) + 2, gh = Math.ceil(H / cell) + 2;
-  const g = Array.from({ length: gw * gh }, () => rng());
-  return (x, y) => {
-    const fx = x / cell, fy = y / cell; const ix = Math.floor(fx), iy = Math.floor(fy);
-    const tx = fx - ix, ty = fy - iy; const s = (t) => t * t * (3 - 2 * t);
-    const v = (i, j) => g[(j % gh) * gw + (i % gw)];
-    const a = v(ix, iy) + (v(ix + 1, iy) - v(ix, iy)) * s(tx);
-    const b = v(ix, iy + 1) + (v(ix + 1, iy + 1) - v(ix, iy + 1)) * s(tx);
-    return a + (b - a) * s(ty);
-  };
-}
+export { MW, MH };
+export const capXY = (k) => ({ x: (k.cap[0] + 0.5) / 34 * MW, y: (k.cap[1] + 0.5) / 22 * MH, size: k.size });
+export const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) / 29.4; // в «шагах» провинций
 
 export function generateMap(seed = 20300101) {
-  const rng = makeRng(seed);
-  const n1 = valueNoise(rng, 4), n2 = valueNoise(rng, 2.5), n3 = valueNoise(rng, 3);
-  const provs = [];
-  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
-    let land = 0.55 * n1(c, r) + 0.25 * n2(c, r) - 0.2;
-    for (const k of COUNTRIES) {
-      const d = hexDist([c, r], k.cap); const sg = 2.2 + 2.3 * k.size;
-      land += 0.75 * Math.exp(-(d * d) / (2 * sg * sg));
-    }
-    const ex = Math.min(c, W - 1 - c, r, H - 1 - r);
-    if (ex < 2) land -= (2 - ex) * 0.25;
-    provs.push({ id: idx(c, r), col: c, row: r, land: land > 0.62, owner: null, ctrl: null });
+  const rng = makeRng(seed ^ 0x5bd1e995);
+  const caps = COUNTRIES.map(capXY);
+  const geo = buildGeometry(seed, caps);
+  const provs = geo.cells.map((c, i) => ({ id: i, x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, nb: c.nb, land: !!c.poly && c.landScore > 0.62, owner: null, ctrl: null }));
+  const nearest = (x, y) => { let best = 0, bd = Infinity; for (const p of provs) { const d = (p.x - x) ** 2 + (p.y - y) ** 2; if (d < bd && geo.cells[p.id].poly) { bd = d; best = p.id; } } return best; };
+  const capIdx = {};
+  for (const k of COUNTRIES) {
+    const c = capXY(k); const i = nearest(c.x, c.y); capIdx[k.id] = i;
+    provs[i].land = true; for (const j of provs[i].nb) if (geo.cells[j].poly) provs[j].land = true;
   }
-  // Капиталы гарантированно — суша
-  for (const k of COUNTRIES) { provs[idx(...k.cap)].land = true; for (const [c, r] of neighbors(...k.cap)) provs[idx(c, r)].land = true; }
-
-  // Взвешенный Дейкстра от столиц
-  const dist = new Array(W * H).fill(Infinity);
+  // взвешенный Дейкстра от столиц
+  const dst = new Array(provs.length).fill(Infinity);
   const q = [];
-  for (const k of COUNTRIES) { const i = idx(...k.cap); dist[i] = 0; provs[i].owner = k.id; q.push([0, i, k]); }
+  for (const k of COUNTRIES) { const i = capIdx[k.id]; dst[i] = 0; provs[i].owner = k.id; q.push([0, i, k]); }
   while (q.length) {
     q.sort((a, b) => a[0] - b[0]);
     const [d, i, k] = q.shift();
-    if (d > dist[i] || provs[i].owner !== k.id) continue;
+    if (d > dst[i] || provs[i].owner !== k.id) continue;
     const p = provs[i];
-    for (const [c, r] of neighbors(p.col, p.row)) {
-      const j = idx(c, r); if (!provs[j].land) continue;
-      const nd = d + (1 + 0.6 * n3(c, r)) / Math.pow(k.size, 0.9);
-      if (nd < dist[j]) { dist[j] = nd; provs[j].owner = k.id; q.push([nd, j, k]); }
+    for (const j of p.nb) {
+      const r = provs[j]; if (!r.land) continue;
+      const nd = d + (Math.hypot(r.x - p.x, r.y - p.y) / 36) * (1 + 0.7 * geo.n3(r.x, r.y)) / Math.pow(k.size, 0.9);
+      if (nd < dst[j]) { dst[j] = nd; r.owner = k.id; q.push([nd, j, k]); }
     }
   }
-  // Ничейная суша → море
-  for (const p of provs) if (p.land && !p.owner) p.land = false;
+  // острова — ближайшей стране
+  for (const p of provs) if (p.land && !p.owner) {
+    let best = null, bd = Infinity;
+    for (const q of provs) if (q.owner) { const d = (q.x - p.x) ** 2 + (q.y - p.y) ** 2; if (d < bd) { bd = d; best = q.owner; } }
+    if (bd < 160 * 160) p.owner = best; else p.land = false;
+  }
+  for (const p of provs) { if (!p.land) { delete p.owner; delete p.ctrl; } p.coast = p.land && p.nb.some((j) => !provs[j].land); }
 
-  // Местность и ресурсы
+  // местность и ресурсы
   const byId = Object.fromEntries(COUNTRIES.map((k) => [k.id, k]));
-  const tn = valueNoise(rng, 2);
   for (const p of provs) {
     if (!p.land) continue;
-    const lat = p.row / H; const m = tn(p.col, p.row);
+    const lat = p.y / MH; const m = geo.n2(p.x * 1.7 + 300, p.y * 1.7 + 200);
     let t = 'plain';
     if (lat < 0.2) t = m > 0.5 ? 'tundra' : 'forest';
     else if (lat > 0.68 && byId[p.owner].res.oil > 0.5) t = m > 0.65 ? 'mountain' : 'desert';
-    else if (m > 0.72) t = 'mountain';
-    else if (m < 0.3) t = 'forest';
+    else if (m > 0.68) t = 'mountain';
+    else if (m < 0.33) t = 'forest';
     p.terrain = t;
     const b = byId[p.owner].res;
     const res = { oil: 0, gas: 0, metals: 0, grain: 0, coal: 0, iron: 0, copper: 0, rare: 0, timber: 0 };
@@ -97,13 +67,12 @@ export function generateMap(seed = 20300101) {
     res.metals = res.iron + res.copper;
     res.grain = { plain: 1, forest: 0.45, mountain: 0.2, desert: 0.12, tundra: 0.15 }[t] * (0.7 + 0.6 * rng());
     p.res = res;
-    p.popW = { plain: 1, forest: 0.7, mountain: 0.45, desert: 0.3, tundra: 0.25 }[t] * (0.6 + 0.8 * rng());
+    p.popW = { plain: 1, forest: 0.7, mountain: 0.45, desert: 0.3, tundra: 0.25 }[t] * (0.6 + 0.8 * rng()) * (p.coast ? 1.25 : 1);
     p.core = p.owner; p.ctrl = p.owner;
   }
   for (const k of COUNTRIES) {
-    const cp = provs[idx(...k.cap)]; cp.capital = true; cp.popW *= 5;
-    for (const [c, r] of neighbors(...k.cap)) if (provs[idx(c, r)].owner === k.id) provs[idx(c, r)].popW *= 1.6;
-    // у каждого ресурсного профиля — хотя бы одно месторождение
+    const cp = provs[capIdx[k.id]]; cp.capital = true; cp.popW *= 5;
+    for (const j of cp.nb) if (provs[j].owner === k.id) provs[j].popW *= 1.6;
     for (const key of ['oil', 'gas', 'iron', 'coal', 'rare']) {
       const bias = key === 'iron' ? k.res.metals : k.res[key];
       if ((bias || 0) > 0 && !provs.some((p) => p.owner === k.id && p.res[key] > 0)) {
@@ -123,7 +92,7 @@ export function createWorld(playerId, opts = {}) {
   seedRng(seed);
   const provs = generateMap(opts.mapSeed || 20300101);
   const G = {
-    version: 1, seed, turn: 0, year: START_YEAR, month: 0, player: playerId, difficulty: opts.difficulty || 'normal',
+    version: 2, seed, mapSeed: opts.mapSeed || 20300101, turn: 0, year: START_YEAR, month: 0, player: playerId, difficulty: opts.difficulty || 'normal',
     provs, countries: {}, rel: {}, treaties: { trade: {}, nap: {}, alliance: {} }, sanctions: {}, wars: [],
     log: [], pendingEvents: [], cooldowns: {}, gameOver: null, flags: {}, worldShock: 0, globalRate: 0.03,
   };
@@ -213,8 +182,7 @@ export function bordersOf(G) {
   for (const id in G.countries) B[id] = new Set();
   for (const p of G.provs) {
     if (!p.land) continue;
-    for (const [c, r] of neighbors(p.col, p.row)) { const q = G.provs[idx(c, r)]; if (q.land && q.owner !== p.owner) B[p.owner].add(q.owner); }
+    for (const j of p.nb) { const q = G.provs[j]; if (q.land && q.owner !== p.owner) B[p.owner].add(q.owner); }
   }
   return B;
 }
-

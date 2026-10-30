@@ -2,7 +2,7 @@
 // Каждый месяц: мощности → производство (с учётом дефицита сырья) → спрос (конечный + промежуточный)
 // → распределение экспорта по импортёрам (гравитация, барьеры, санкции, эмбарго) → цены → дефициты и излишки.
 import { GOODS, GOOD, IO, mixFor } from './goods.js';
-import { countryResources, hexDist, pairKey, idx } from './world.js';
+import { countryResources, dist as pdist, pairKey } from './world.js';
 import { clamp } from './rng.js';
 
 const H_LEN = 120;
@@ -18,7 +18,7 @@ function agriMix(G, C) {
   const m = { grain: 0.01, meat: 0.01, fruit: 0.01, cotton: 0.002 };
   for (const p of G.provs) {
     if (!p.land || p.owner !== C.id) continue;
-    const lat = p.row / 22;
+    const lat = p.y / 640;
     m.grain += p.res.grain;
     m.meat += { plain: 0.6, forest: 0.45, tundra: 0.25, mountain: 0.3, desert: 0.1 }[p.terrain];
     m.fruit += (lat > 0.45 ? 0.8 : 0.25) * ({ plain: 1, forest: 0.6, mountain: 0.3, desert: 0.15, tundra: 0.05 }[p.terrain]);
@@ -113,7 +113,7 @@ function dist(G, a, b) {
   if (distCache[k] == null) {
     const ca = G.provs.find((p) => p.capital && p.owner === a) || G.provs.find((p) => p.land && p.owner === a);
     const cb = G.provs.find((p) => p.capital && p.owner === b) || G.provs.find((p) => p.land && p.owner === b);
-    distCache[k] = ca && cb ? hexDist([ca.col, ca.row], [cb.col, cb.row]) : 20;
+    distCache[k] = ca && cb ? pdist(ca, cb) : 20;
   }
   return distCache[k];
 }

@@ -1,7 +1,45 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: derzhava_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-derzhava}
+      POSTGRES_USER: ${POSTGRES_USER:-derzhava}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-derzhava_db_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - derzhava_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-derzhava} -d ${POSTGRES_DB:-derzhava}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   derzhava:
     build: .
     container_name: derzhava
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-derzhava}
+      POSTGRES_USER: ${POSTGRES_USER:-derzhava}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-derzhava_db_password}
+      PORT: 8080
     ports:
-      - "8080:80"
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    networks:
+      - derzhava_network
+
+volumes:
+  postgres_data:
+
+networks:
+  derzhava_network:
+    driver: bridge

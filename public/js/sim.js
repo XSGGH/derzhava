@@ -1,6 +1,6 @@
 // ===== Ядро симуляции: экономика, бюджет, общество, политика, армия, войны =====
 import { GROUPS, PARTIES, GOV, LAW_BY_ID, END_YEAR } from './data.js';
-import { countryResources, neighbors, idx, pairKey, W } from './world.js';
+import { countryResources, pairKey } from './world.js';
 import { tradeStep, price, tariffOf } from './trade.js';
 import { rnd, rr, clamp, chance } from './rng.js';
 
@@ -35,8 +35,8 @@ export function computeBorders(G) {
   for (const id in G.countries) B[id] = new Set();
   for (const p of G.provs) {
     if (!p.land) continue;
-    for (const [c, r] of neighbors(p.col, p.row)) {
-      const q = G.provs[idx(c, r)];
+    for (const j of p.nb) {
+      const q = G.provs[j];
       if (q.land && q.owner !== p.owner) { B[p.owner].add(q.owner); }
     }
   }
@@ -536,21 +536,21 @@ function occupy(G, w, fromSide, toSide, n) {
     const cands = [];
     for (const p of G.provs) {
       if (!p.land || !toSide.includes(p.ctrl)) continue;
-      const adj = neighbors(p.col, p.row).some(([c, r]) => fromSide.includes(G.provs[idx(c, r)].ctrl));
+      const adj = p.nb.some((j) => fromSide.includes(G.provs[j].ctrl));
       if (adj) cands.push(p);
     }
     if (!cands.length) return;
     cands.sort((a, b) => (a.capital ? 1 : 0) - (b.capital ? 1 : 0) + (rnd() - 0.5) * 0.5);
     const p = cands[0]; if (p.capital && w.score < 75 && w.score > -75) return;
     // захватчик — тот член fromSide, кто соседствует
-    const adjCtrl = neighbors(p.col, p.row).map(([c, r]) => G.provs[idx(c, r)].ctrl).find((x) => fromSide.includes(x));
+    const adjCtrl = p.nb.map((j) => G.provs[j].ctrl).find((x) => fromSide.includes(x));
     p.ctrl = adjCtrl;
   }
 }
 function liberate(G, side, n) {
   for (let i = 0; i < n; i++) {
     const p = G.provs.find((p) => p.land && side.includes(p.owner) && p.ctrl !== p.owner
-      && neighbors(p.col, p.row).some(([c, r]) => G.provs[idx(c, r)].ctrl === p.owner));
+      && p.nb.some((j) => G.provs[j].ctrl === p.owner));
     if (!p) return; p.ctrl = p.owner;
   }
 }

@@ -4,33 +4,39 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Держава — геополитическая стратегия</title>
-  <meta name="description" content="Браузерная геополитическая стратегия с глубокой экономикой и политикой">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 0l8 8-8 8-8-8z' fill='%23e8b64a'/></svg>">
+  <meta name="description" content="Браузерная геополитическая стратегия с глубокой экономикой, торговлей и политикой">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1l7 7-7 7-7-7z' fill='%231f5fbf'/></svg>">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="start"></div>
+  <div id="screen" class="screen"></div>
   <div id="game" hidden>
     <header class="top">
-      <div class="brand">◆ ДЕРЖАВА</div>
-      <div id="hdr-country" class="hc"></div>
-      <div class="datebox"><span id="hdr-date"></span></div>
-      <div id="controls" class="controls">
-        <button data-ctl="0" title="Пауза (Пробел)">⏸</button>
-        <button data-ctl="1" title="Медленно">▶</button>
-        <button data-ctl="2" title="Быстро">▶▶</button>
-        <button data-ctl="3" title="Очень быстро">▶▶▶</button>
-        <button data-ctl="next" class="next" title="Следующий месяц (Enter)">Следующий месяц →</button>
-        <button data-ctl="save" title="Сохранить">💾</button>
-        <button data-ctl="load" title="Загрузить">📂</button>
-        <button data-ctl="menu" title="Главное меню">☰</button>
+      <div class="brand"><i></i><span>ДЕРЖАВА</span></div>
+      <div id="who" class="who"></div>
+      <div id="clock" class="clock">
+        <span id="saving" class="saving"></span>
+        <div class="date" id="date"></div>
+        <div class="seg">
+          <button data-speed="0" title="Пауза (пробел)">❚❚</button>
+          <button data-speed="1" title="Медленно: месяц за 4 с">▶</button>
+          <button data-speed="2" title="Нормально: месяц за 2 с">▶▶</button>
+          <button data-speed="3" title="Быстро: месяц за 1 с">▶▶▶</button>
+        </div>
+        <button class="btn primary" id="nextbtn" title="Enter">Следующий месяц</button>
       </div>
-      <div id="hdr-stats" class="stats"></div>
+      <div id="tools" class="tools">
+        <button class="btn inboxbtn" data-tool="inbox" title="Донесения">Донесения<span id="inboxcount" class="badge" hidden>0</span></button>
+        <button class="btn" data-tool="save">Сохранить</button>
+        <button class="btn" data-tool="load">Загрузить</button>
+        <button class="btn" data-tool="exit" title="Сохранить и выйти в меню">Меню</button>
+      </div>
     </header>
+    <div id="inds" class="inds"></div>
     <main class="layout">
       <div id="mapwrap" class="mapwrap">
         <svg id="map" preserveAspectRatio="xMidYMid meet"></svg>
-        <div id="modes" class="modes">
+        <div class="mapbar"><div class="seg" id="mapmodes">
           <button data-mode="political" class="on">Политическая</button>
           <button data-mode="relations">Отношения</button>
           <button data-mode="bloc">Блоки</button>
@@ -38,15 +44,21 @@
           <button data-mode="stability">Стабильность</button>
           <button data-mode="resources">Ресурсы</button>
           <button data-mode="terrain">Рельеф</button>
-        </div>
+        </div></div>
+        <div class="zoom" id="zoomctl"><button data-z="+" title="Приблизить">+</button><button data-z="-" title="Отдалить">−</button><button data-z="0" title="Вся карта">⤢</button></div>
+        <div id="legend" class="legend"></div>
         <div id="tip" class="tip" hidden></div>
       </div>
       <aside class="side">
-        <nav id="tabs" class="tabs"></nav>
-        <div id="panel" class="panel"></div>
+        <nav id="rail" class="rail"></nav>
+        <section class="content">
+          <div class="chead"><h2 id="ctitle"></h2><div id="subtabs" class="subtabs"></div></div>
+          <div id="cbody" class="cbody"></div>
+        </section>
       </aside>
     </main>
   </div>
+  <div id="drawer" class="drawer" hidden></div>
   <div id="modal" class="modal" hidden></div>
   <div id="toast" class="toast"></div>
   <script type="module" src="js/main.js"></script>
