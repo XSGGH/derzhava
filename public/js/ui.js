@@ -469,7 +469,7 @@ function partnerView() {
   const id = detail.id, C = P(), X = G.countries[id], T = C.trade, xT = X.trade;
   detail.tab ||= 'trade';
   const ex = T.exBy[id] || 0, im = T.imBy[id] || 0;
-  const tags = [atWar(G, G.player, id) ? '<span class="pill bad">война</span>' : '', hasTreaty(G, 'trade', G.player, id) ? '<span class="pill good">торговое соглашение</span>' : '', sanctioned(G, G.player, id) ? '<span class="pill bad">наши санкции</span>' : '', sanctioned(G, id, G.player) ? '<span class="pill bad">их санкции</span>' : '', hasTreaty(G, 'alliance', G.player, id) ? '<span class="pill blue">союзник</span>' : ''].join(' ');
+  const tags = [atWar(G, G.player, id) ? '<span class="pill bad">война</span>' : '', hasTreaty(G, 'trade', G.player, id) ? '<span class="pill good">торговое соглашение</span>' : '', sanctioned(G, G.player, id) ? '<span class="pill bad">наши санкции</span>' : '', sanctioned(G, id, G.player) ? '<span class="pill bad">их санкции</span>' : '', G.embargo?.[G.player + '>' + id] || G.embargo?.[id + '>' + G.player] ? '<span class="pill bad">эмбарго</span>' : '', hasTreaty(G, 'alliance', G.player, id) ? '<span class="pill blue">союзник</span>' : ''].join(' ');
   const head = detailHead(`<div class="ghead"><span class="flag lg" style="background:${X.color}"></span><div><h3>${X.name}</h3><div class="row" style="margin:2px 0 0">Отношения ${relTag(G.rel[G.player][id])} ${tags}<a class="clink" data-act="todiplo" data-id="${id}">Дипломатия →</a></div></div></div>`,
     [['trade', 'Торговля'], ['dep', 'Зависимости'], ['econ', 'Их экономика']]);
   let body = '';
@@ -579,7 +579,7 @@ VIEWS['politics.decrees'] = () => {
 };
 
 // =================== ВНЕШНЯЯ ПОЛИТИКА ===================
-const ACT_GROUPS = [['Дипломатия', ['visit', 'aid', 'nap', 'alliance', 'break_alliance']], ['Экономика', ['trade', 'cancel_trade', 'sanction', 'lift_sanction']], ['Война и мир', ['war', 'peace_white', 'peace_annex']]];
+const ACT_GROUPS = [['Дипломатия', ['visit', 'aid', 'nap', 'alliance', 'break_alliance']], ['Экономика', ['trade', 'cancel_trade', 'sanction', 'lift_sanction', 'embargo', 'lift_embargo']], ['Война и мир', ['war', 'peace_white', 'peace_annex']]];
 VIEWS['foreign.countries'] = () => {
   const C = P();
   if (!selC || selC === G.player || !G.countries[selC]?.alive) selC = alive(G).find((x) => x.id !== G.player)?.id;
@@ -589,7 +589,7 @@ VIEWS['foreign.countries'] = () => {
   }).join('');
   const X = G.countries[selC], xs = strength(G, X), ms = strength(G, C);
   const acts = ACT_GROUPS.map(([gname, ids]) => {
-    const items = ids.map((a) => { const c = canDo(G, G.player, X.id, a); if (!c.ok && /Нет|Уже|Санкций нет|Мир заключают|Нет союза|Нет соглашения/.test(c.why)) return ''; return `<button class="act ${a === 'war' ? 'danger' : ''}" data-act="diplo" data-id="${a}" ${c.ok ? '' : 'disabled'}><b>${ACTIONS[a].name}</b><small>${ACTIONS[a].desc}</small><em>${ACTIONS[a].pc} ПК</em>${c.ok ? '' : `<i>${c.why}</i>`}</button>`; }).join('');
+    const items = ids.map((a) => { const c = canDo(G, G.player, X.id, a); if (!c.ok && /Нет|Уже|Санкций нет|Мир заключают|Нет союза|Нет соглашения|Нет эмбарго/.test(c.why)) return ''; return `<button class="act ${a === 'war' ? 'danger' : ''}" data-act="diplo" data-id="${a}" ${c.ok ? '' : 'disabled'}><b>${ACTIONS[a].name}</b><small>${ACTIONS[a].desc}</small><em>${ACTIONS[a].pc} ПК</em>${c.ok ? '' : `<i>${c.why}</i>`}</button>`; }).join('');
     return items ? `<div class="grp-title">${gname}</div><div class="acts">${items}</div>` : '';
   }).join('');
   return `<div class="split"><div class="clist">${list}</div><div>

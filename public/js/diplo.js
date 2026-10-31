@@ -15,8 +15,10 @@ export const ACTIONS = {
   nap: { name: 'Пакт о ненападении', pc: 8, desc: 'Обе стороны обязуются не нападать. Нужны отношения ≥ 0.' },
   alliance: { name: 'Военный союз', pc: 15, desc: 'Союзник вступает в оборонительные войны. Нужны отношения ≥ 55.' },
   break_alliance: { name: 'Выйти из союза', pc: 5, desc: '−30 к отношениям.' },
-  sanction: { name: 'Ввести санкции', pc: 6, desc: 'Торговля −70%, их экспорт сырья дешевеет. Бьёт и по вам.' },
+  sanction: { name: 'Ввести санкции', pc: 6, desc: 'Торговля падает на ~90% (остаток — серые схемы), их экспорт дешевеет. Бьёт и по вам.' },
   lift_sanction: { name: 'Снять санкции', pc: 2, desc: '+10 к отношениям.' },
+  embargo: { name: 'Полное торговое эмбарго', pc: 10, desc: 'Торговля прекращается полностью, даже серые схемы. Сильный удар по обеим экономикам.' },
+  lift_embargo: { name: 'Снять эмбарго', pc: 3, desc: '+10 к отношениям.' },
   war: { name: 'Объявить войну', pc: 25, desc: 'Нужна общая граница. Мир осудит агрессора.' },
   peace_white: { name: 'Предложить мир (статус-кво)', pc: 5, desc: 'Все оккупированные земли возвращаются.' },
   peace_annex: { name: 'Потребовать аннексии', pc: 10, desc: 'Оккупированные вами провинции отходят вам.' },
@@ -39,6 +41,8 @@ export function canDo(G, a, b, act) {
       case 'break_alliance': return need(hasTreaty(G, 'alliance', a, b), 'Нет союза');
       case 'sanction': return need(!sanctioned(G, a, b), 'Санкции уже действуют');
       case 'lift_sanction': return need(sanctioned(G, a, b), 'Санкций нет');
+      case 'embargo': return need(!G.embargo?.[a + '>' + b], 'Уже действует') || need(!war, 'Идёт война');
+      case 'lift_embargo': return need(!!G.embargo?.[a + '>' + b], 'Нет эмбарго');
       case 'war': return need(!war, 'Уже воюем') || need(borders(G, a, b), 'Нет общей границы') || need(!hasTreaty(G, 'alliance', a, b), 'Сначала выйдите из союза') || need(G.turn >= 3, 'Слишком рано');
       case 'peace_white': case 'peace_annex': return need(!!war && (war.a === a || war.b === a) && (war.a === b || war.b === b), 'Мир заключают лидеры коалиций');
     }
@@ -88,6 +92,8 @@ export function doAction(G, a, b, act) {
       for (const X of alive(G)) if (X.id !== a && X.id !== b && hasTreaty(G, 'alliance', X.id, b)) relAdd(G, a, X.id, -8);
       break;
     case 'lift_sanction': delete G.sanctions[a + '>' + b]; relAdd(G, a, b, 10); break;
+    case 'embargo': (G.embargo ||= {})[a + '>' + b] = true; G.sanctions[a + '>' + b] = true; delete G.treaties.trade[pk]; relAdd(G, a, b, -40); break;
+    case 'lift_embargo': delete G.embargo[a + '>' + b]; relAdd(G, a, b, 10); break;
     case 'war': {
       if (hasTreaty(G, 'nap', a, b)) { for (const X of alive(G)) if (X.id !== a) relAdd(G, a, X.id, -15); log(G, `${A.short} вероломно нарушает пакт о ненападении!`, 'war'); }
       declareWar(G, a, b);
@@ -97,7 +103,7 @@ export function doAction(G, a, b, act) {
     case 'peace_white': makePeace(G, atWar(G, a, b), 'white'); break;
     case 'peace_annex': { const w = atWar(G, a, b); makePeace(G, w, w.sideA.includes(a) ? 'annexA' : 'annexB'); break; }
   }
-  const msg = { visit: 'Визит прошёл успешно', aid: 'Помощь передана', trade: 'Торговое соглашение подписано', nap: 'Пакт подписан', alliance: 'Союз заключён', sanction: 'Санкции введены', lift_sanction: 'Санкции сняты', war: 'Война объявлена', peace_white: 'Мир заключён', peace_annex: 'Противник капитулировал' }[act] || 'Готово';
+  const msg = { visit: 'Визит прошёл успешно', aid: 'Помощь передана', trade: 'Торговое соглашение подписано', nap: 'Пакт подписан', alliance: 'Союз заключён', sanction: 'Санкции введены', lift_sanction: 'Санкции сняты', embargo: 'Эмбарго введено', lift_embargo: 'Эмбарго снято', war: 'Война объявлена', peace_white: 'Мир заключён', peace_annex: 'Противник капитулировал' }[act] || 'Готово';
   if (!['visit', 'aid'].includes(act)) log(G, `${A.short} → ${B.short}: ${msg.toLowerCase()}.`, act === 'war' ? 'war' : 'diplo');
   return { ok: true, msg };
 }
@@ -131,6 +137,7 @@ export function relationsDrift(G) {
     if (hasTreaty(G, 'alliance', A.id, B.id)) t += 20;
     if (hasTreaty(G, 'nap', A.id, B.id)) t += 5;
     if (sanctioned(G, A.id, B.id) || sanctioned(G, B.id, A.id)) t -= 25;
+    if (G.embargo?.[A.id + '>' + B.id] || G.embargo?.[B.id + '>' + A.id]) t -= 15;
     const lostA = G.provs.some((p) => p.land && p.core === A.id && p.owner === B.id);
     const lostB = G.provs.some((p) => p.land && p.core === B.id && p.owner === A.id);
     if (lostA || lostB) t -= 35;

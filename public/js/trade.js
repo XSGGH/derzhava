@@ -6,6 +6,7 @@ import { countryResources, dist as pdist, pairKey } from './world.js';
 import { clamp } from './rng.js';
 
 const H_LEN = 120;
+const GRAY = 0.08;
 const push = (arr, v, n = H_LEN) => { arr.push(Math.round(v * 100) / 100); if (arr.length > n) arr.shift(); };
 const alive = (G) => Object.values(G.countries).filter((c) => c.alive);
 const atWar = (G, a, b) => G.wars.some((w) => (w.sideA.includes(a) && w.sideB.includes(b)) || (w.sideA.includes(b) && w.sideB.includes(a)));
@@ -122,6 +123,7 @@ function dist(G, a, b) {
 export function linkWeight(G, i, j, g) {
   const A = G.countries[i], B = G.countries[j];
   if (atWar(G, i, j)) return 0;
+  if (G.embargo?.[i + '>' + j] || G.embargo?.[j + '>' + i]) return 0;
   if (A.tp.emb[g + '>' + j] || B.tp.emb[g + '>' + i]) return 0;
   let w = 1 / (1 + dist(G, i, j) / 8);
   if (G._borders?.[i]?.has(j)) w *= 1.5;
@@ -130,7 +132,7 @@ export function linkWeight(G, i, j, g) {
   w *= clamp(1 + (G.rel[i][j] || 0) / 250, 0.6, 1.4);
   w *= Math.pow(1 - (A.tp.duty[g] || 0), 2) * (1 + 2 * (A.tp.sub[g] || 0));
   w *= Math.pow(clamp((A.eco.fx / (A.eco.pl || 1)) / 100, 0.3, 3), 0.6); // слабая реальная валюта — дешевле экспорт
-  if (sanct(G, i, j)) w *= 0.12; // серые схемы
+  if (sanct(G, i, j)) w *= 0.3; // серые схемы (объём ограничен при распределении)
   return w;
 }
 
@@ -179,7 +181,13 @@ export function tradeStep(G, init = false) {
         const need = M[b] - got[b];
         const tot = Object.values(offer[b]).reduce((s, v) => s + v, 0);
         const k = tot > need ? need / tot : 1;
-        for (const a in offer[b]) { const v = offer[b][a] * k; F[a][b] = (F[a][b] || 0) + v; sold[a] += v; got[b] += v; moved += v; }
+        for (const a in offer[b]) {
+          let v = offer[b][a] * k;
+          // санкции: через серые схемы проходит не больше 8% потребности импортёра
+          if (sanct(G, a, b)) v = Math.max(0, Math.min(v, GRAY * M[b] - (F[a][b] || 0)));
+          if (v <= 0) continue;
+          F[a][b] = (F[a][b] || 0) + v; sold[a] += v; got[b] += v; moved += v;
+        }
       }
       if (moved < 1e-4) break;
     }
